@@ -14,11 +14,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ==================== 1. עיצוב מותאם למחשב ולטלפון הנייד (Responsive RTL CSS) ====================
+# ==================== 1. עיצוב מותאם + העלמת הסרגל העליון של Streamlit ====================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&display=swap');
     
+    /* העלמה מוחלטת של הסרגל העליון (Share / GitHub / Menu) שמסתיר את הכותרת */
+    header[data-testid="stHeader"],
+    div[data-testid="stToolbar"],
+    div[data-testid="stDecoration"],
+    div[data-testid="stStatusWidget"],
+    #MainMenu,
+    header,
+    footer {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0px !important;
+    }
+
     html, body, [class*="css"], .stApp {
         font-family: 'Rubik', sans-serif !important;
         direction: rtl;
@@ -26,7 +39,7 @@ st.markdown("""
         background-color: #f8fafc;
     }
     
-    /* מרכוז התוכן בדסקטופ */
+    /* מרכוז התוכן בדסקטופ ומרווח נקי מלמעלה */
     .block-container {
         max-width: 1140px !important;
         padding-top: 1.5rem !important;
@@ -107,10 +120,10 @@ st.markdown("""
         font-weight: 500;
     }
 
-    /* ========== התאמה ייעודית למסכי טלפון נייד (Mobile Adaptation) ========== */
+    /* ========== התאמה ייעודית למסכי טלפון נייד ========== */
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.8rem !important;
+            padding-top: 1rem !important;
             padding-left: 0.6rem !important;
             padding-right: 0.6rem !important;
         }
@@ -124,7 +137,6 @@ st.markdown("""
         .header-sub {
             font-size: 0.78rem !important;
         }
-        /* כפתורים ושדות קלט נוחים ללחיצה באצבע בנייד (מונע זום אוטומטי באייפון) */
         button[kind="primary"], button[kind="secondary"] {
             min-height: 2.8rem !important;
             font-size: 0.95rem !important;
@@ -181,7 +193,6 @@ def init_db():
         )
     ''')
     
-    # הסרת מפתחות ישנים והזרקת מפתחות הכניסה המאובטחים
     c.execute("DELETE FROM access_keys WHERE access_key IN ('ADMIN-ROEY', 'MAD-NAMER', 'MAD-MANHAR')")
     secure_keys = [
         ('BH-ADMIN-9920', 'admin', 'רועי - מנהל מערכת ראשי'),
@@ -223,7 +234,6 @@ def format_wa_phone(raw_phone):
         return None
     return '972' + p[1:]
 
-# זיהוי אוטומטי של מפתח גישה מהקישור בוואטסאפ (?key=SUP-XXXX)
 query_params = st.query_params
 url_key = query_params.get("key", "").strip().upper()
 
@@ -239,7 +249,7 @@ if url_key and not st.session_state.user:
     if u:
         st.session_state.user = dict(u)
 
-# ==================== 2. מסך כניסה מאובטח (מותאם לנייד ולמחשב) ====================
+# ==================== 2. מסך כניסה מאובטח ====================
 if not st.session_state.user:
     col_l, col_center, col_r = st.columns([0.8, 2, 0.8])
     with col_center:
@@ -252,7 +262,7 @@ if not st.session_state.user:
         
         with st.container(border=True):
             st.markdown("##### הזדהות וכניסה למערכת")
-            st.caption("הזן את מפתח הגישה האישי (Access Key) שלך. ניתן להיכנס מכל מחשב או טלפון נייד.")
+            st.caption("אנא הזן את מפתח הגישה האישי (Access Key) שלך.")
             
             if st.session_state.failed_attempts >= 5:
                 st.error("הגעת למספר הניסיונות המקסימלי. אנא רענן את הדף או פנה למנהל המערכת.")
@@ -272,17 +282,17 @@ if not st.session_state.user:
                     st.session_state.failed_attempts += 1
                     st.error(f"מפתח גישה שגוי או שאינו מורשה (ניסיון {st.session_state.failed_attempts}/5).")
                     
-        st.markdown('<div class="watermark">Powered by BEN HUR | מותאם למחשב ולסלולר</div>', unsafe_allow_html=True)
+        st.markdown('<div class="watermark">Powered by BEN HUR</div>', unsafe_allow_html=True)
     st.stop()
 
 # ==================== כותרת עליונה למשתמש מחובר ====================
 user = st.session_state.user
-top_c1, top_c2 = st.columns([4, 1])
+top_c1, top_c2 = st.columns([4.5, 1])
 with top_c1:
     st.markdown(f"""
     <div class="header-box" style="text-align: right;">
         <div class="header-title">🛡️ SAPakim | שלום, {user['entity_name']}</div>
-        <div class="header-sub">מחובר בהרשאת: {user['role']} (מותאם לנייד ולמחשב)</div>
+        <div class="header-sub">מחובר בהרשאת: {user['role']}</div>
     </div>
     """, unsafe_allow_html=True)
 with top_c2:
@@ -301,7 +311,6 @@ if user['role'] in ['admin', 'mador']:
         "📥 טעינת אקסל"
     ])
     
-    # --- לשונית 1: צפייה ומענה לספקים (תמיכה בתצוגת כרטיסיות לנייד או טבלה למחשב) ---
     with tab1:
         df_orders = pd.read_sql_query("SELECT * FROM orders ORDER BY needs_attention DESC, supplier_name, order_number", conn)
         if df_orders.empty:
@@ -318,7 +327,7 @@ if user['role'] in ['admin', 'mador']:
             with f_col1:
                 search_q = st.text_input("🔍 חיפוש מהיר (ספק, הזמנה, מק\"ט או פריט):", "")
             with f_col2:
-                display_mode = st.radio("תצוגה:", ["💻 טבלה (למחשב)", "📱 כרטיסיות (לנייד)"], horizontal=True)
+                display_mode = st.radio("תצוגה:", ["💻 טבלה", "📱 כרטיסיות"], horizontal=True)
                 
             only_delayed = st.checkbox("הצג רק שורות בפיגור / ממתינות למענה מדור", value=False)
                 
@@ -330,7 +339,7 @@ if user['role'] in ['admin', 'mador']:
                 view_df = view_df[(view_df['needs_attention'] == 1) | (view_df['supplier_status'].str.contains('עיכוב|פיגור|טרם', na=False))]
 
             if display_mode.startswith("📱"):
-                st.caption("📱 **מצב נייד למדור:** נתוני הספק נעולים. לחץ על הזמנה כדי להשיב לספק בקלות מהטלפון.")
+                st.caption("🔒 נתוני הספק נעולים. לחץ על הזמנה כדי להשיב לספק.")
                 for _, r in view_df.iterrows():
                     alert_icon = "⚠️" if r['needs_attention'] == 1 else "📦"
                     with st.expander(f"{alert_icon} {r['supplier_name']} | הזמנה {r['order_number']} שורה {r['line_number']} ({r['supplier_status']})"):
@@ -387,9 +396,9 @@ if user['role'] in ['admin', 'mador']:
                 df_orders.to_excel(writer, index=False, sheet_name='דוח הזמנות מתוקף')
             st.download_button("📥 הורד דוח מאוחד ל-Excel", data=out.getvalue(), file_name="SAPakim_Report.xlsx", use_container_width=True)
 
-    # --- לשונית 2: שליחת וואטסאפ מהירה (תומכת גם במחשב וגם באפליקציית וואטסאפ בנייד) ---
+    # --- לשונית 2: שליחת וואטסאפ מהירה ---
     with tab2:
-        st.markdown("##### 💬 מרכז שליחת תזכורות WhatsApp (מותאם לנייד ולמחשב)")
+        st.markdown("##### 💬 מרכז שליחת תזכורות WhatsApp")
         sup_query = '''
             SELECT 
                 u.entity_name AS supplier_name,
@@ -413,7 +422,7 @@ if user['role'] in ['admin', 'mador']:
                 horizontal=True
             )
         with c_wa2:
-            st.link_button("🌐 פתח WhatsApp Web (במחשב)", "https://web.whatsapp.com", use_container_width=True)
+            st.link_button("🌐 פתח WhatsApp Web", "https://web.whatsapp.com", use_container_width=True)
             
         target_sups = df_sups[df_sups['lagging_orders'] > 0].copy() if filter_mode.startswith("🔴") else df_sups.copy()
         select_all = st.checkbox(f"✅ בחר את כל הספקים ברשימה ({len(target_sups)} ספקים)", value=False)
@@ -442,14 +451,13 @@ if user['role'] in ['admin', 'mador']:
                     f"היי {s_name}, מה נשמע?\n"
                     f"זה רועי מהחט\"ל. ראיתי שיש לנו פער בלוח הזמנים בפריטים הבאים:\n"
                     f"{ord_lines}\n\n"
-                    f"לעדכון סטטוס וצפי אספקה מהנייד או מהמחשב בלחיצה אחת:\n"
+                    f"לעדכון סטטוס וצפי אספקה בלחיצה אחת:\n"
                     f"{direct_link}\n"
                     f"(מפתח גישה: {s_key})\n"
                     f"תודה מראש!"
                 )
                 
                 if clean_p:
-                    # שימוש ב-wa.me שעובד אוטומטית גם באפליקציית הנייד וגם במחשב!
                     wa_url = f"https://wa.me/{clean_p}?text={urllib.parse.quote(msg)}"
                     wa_links.append((s_name, s_key, clean_p, wa_url, msg))
                 else:
@@ -459,7 +467,7 @@ if user['role'] in ['admin', 'mador']:
             if valid_urls and st.button(f"🚀 פתח צ'אטים בוואטסאפ לכל {len(valid_urls)} הספקים שנבחרו", type="primary", use_container_width=True):
                 js_open = "".join([f"window.open('{u}', '_blank');" for u in valid_urls[:10]])
                 components.html(f"<script>{js_open}</script>", height=0)
-                st.info("חלונות הוואטסאפ נפתחו! (בטלפון הנייד מומלץ ללחוץ על הכפתורים הפרטניים למטה לשליחה חלקה אחד-אחד).")
+                st.info("חלונות הוואטסאפ נפתחו!")
 
             for s_name, s_key, clean_p, wa_url, msg in wa_links:
                 with st.expander(f"📲 {s_name} | מפתח: {s_key} | נייד: {clean_p or 'חסר'}"):
@@ -476,7 +484,7 @@ if user['role'] in ['admin', 'mador']:
     # --- לשונית 3: טעינת אקסל ---
     with tab3:
         st.markdown("##### 📥 טעינת קובץ אקסל מהרשת הסגורה")
-        uploaded = st.file_uploader("בחר קובץ Excel או CSV (מהמחשב או מהטלפון)", type=['xlsx', 'xls', 'csv'])
+        uploaded = st.file_uploader("בחר קובץ Excel או CSV", type=['xlsx', 'xls', 'csv'])
         if uploaded and st.button("טען וסנכרן הזמנות למערכת ⚡", type="primary", use_container_width=True):
             df_in = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
             df_in.columns = df_in.columns.str.strip()
@@ -518,7 +526,7 @@ if user['role'] in ['admin', 'mador']:
             conn.commit()
             st.success(f"נסרקו ועודכנו {count} שורות הזמנה בהצלחה!")
 
-# ==================== 4. מסך ספק (מותאם במיוחד לטלפון הנייד + נעילת תאים) ====================
+# ==================== 4. מסך ספק ====================
 else:
     st.markdown(f"##### 📦 ההזמנות הפתוחות של: {user['entity_name']}")
     
@@ -527,10 +535,9 @@ else:
     if df_sup.empty:
         st.warning("לא נמצאו הזמנות פתוחות המשויכות אליכם כרגע.")
     else:
-        # ברירת מחדל לספק: תצוגת כרטיסיות נוחה לנייד!
         sup_view = st.radio(
             "בחר אופן תצוגה:",
-            ["📱 תצוגת כרטיסיות נוחה לנייד (מומלץ)", "💻 תצוגת טבלה מרוכזת (למחשב)"],
+            ["📱 תצוגת כרטיסיות", "💻 תצוגת טבלה מרוכזת"],
             horizontal=True
         )
         
