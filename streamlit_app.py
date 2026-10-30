@@ -15,12 +15,11 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ==================== 1. עיצוב ייחודי + החזרת בר GitHub + תיקון מוחלט של כתב לבן בנייד ====================
+# ==================== 1. עיצוב ייחודי + בר GitHub תקין + ניגודיות מלאה לנייד ====================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap');
     
-    /* כפיית מצב תצוגה בהיר כדי שמכשירים ניידים ב-Dark Mode לא יהפכו את הכתב ללבן! */
     :root, html, body, .stApp {
         color-scheme: light !important;
         font-family: 'Rubik', sans-serif !important;
@@ -30,7 +29,7 @@ st.markdown("""
         color: #0f172a !important;
     }
     
-    /* 1. החזרת הבר העליון של GitHub/Streamlit ושמירה שלא יעלה על תוכן הדף */
+    /* השארת הבר העליון של GitHub מבלי שיסתיר את הכותרת */
     header[data-testid="stHeader"] {
         background-color: rgba(255, 251, 235, 0.92) !important;
         backdrop-filter: blur(6px);
@@ -39,20 +38,17 @@ st.markdown("""
         z-index: 999 !important;
     }
     
-    /* מרווח עליון מותאם כך שהבר העליון לעולם לא יסתיר את כותרת האתר */
     .block-container {
-        max-width: 1140px !important;
+        max-width: 1220px !important;
         padding-top: 4.2rem !important;
         padding-bottom: 3rem !important;
         margin: 0 auto !important;
     }
     
-    /* נעילת צבע טקסט כהה וברור בכל האלמנטים בנייד ובמחשב */
     p, span, label, div, h1, h2, h3, h4, h5, h6, li, th, td {
         color: #0f172a;
     }
     
-    /* כותרת ראשית ייחודית (Navy & Gold Bronze) */
     .header-box {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 65%, #78350f 100%);
         color: #ffffff !important;
@@ -76,7 +72,6 @@ st.markdown("""
         font-weight: 500;
     }
     
-    /* עיצוב כרטיסיות מדדים (KPIs) ייחודי וברור */
     div[data-testid="metric-container"] {
         background: #ffffff !important;
         padding: 0.9rem 1.1rem !important;
@@ -98,7 +93,6 @@ st.markdown("""
         color: #475569 !important;
     }
     
-    /* תיקון שדות קלט, תיבות בחירה וטפסים בנייד שלא יהיו לבן על לבן */
     input, textarea, select, [data-baseweb="select"] div, [data-baseweb="input"] input {
         background-color: #ffffff !important;
         color: #0f172a !important;
@@ -107,14 +101,12 @@ st.markdown("""
         font-weight: 500 !important;
     }
     
-    /* תוויות מעל שדות (Labels) */
     label[data-testid="stWidgetLabel"] p, .stRadio label p, .stCheckbox label p {
         color: #0f172a !important;
         font-weight: 600 !important;
         font-size: 0.9rem !important;
     }
     
-    /* עיצוב כרטיסיית הזמנה ייחודית לנייד */
     .order-card-header {
         background: linear-gradient(90deg, #fef3c7 0%, #fffbeb 100%);
         color: #78350f !important;
@@ -139,7 +131,6 @@ st.markdown("""
         margin-bottom: 0.4rem;
     }
     
-    /* כפתורים ראשיים בולטים בגוון אמבר-זהב */
     button[kind="primary"] {
         background: linear-gradient(135deg, #d97706 0%, #b45309 100%) !important;
         color: #ffffff !important;
@@ -171,7 +162,6 @@ st.markdown("""
         letter-spacing: 0.5px;
     }
 
-    /* התאמות מסך לטלפון נייד */
     @media (max-width: 768px) {
         .block-container {
             padding-top: 3.8rem !important;
@@ -207,6 +197,7 @@ def init_db():
             access_key TEXT PRIMARY KEY,
             role TEXT NOT NULL,
             entity_name TEXT NOT NULL,
+            contact_person TEXT DEFAULT '',
             phone TEXT DEFAULT '',
             UNIQUE(role, entity_name)
         )
@@ -220,9 +211,11 @@ def init_db():
             item_description TEXT DEFAULT '',
             quantity TEXT DEFAULT '1',
             supplier_name TEXT DEFAULT 'ספק כללי',
+            contact_person TEXT DEFAULT '',
             supplier_phone TEXT DEFAULT '',
             mador_name TEXT DEFAULT 'מדור נמ"ר',
             due_date TEXT DEFAULT '',
+            internal_status TEXT DEFAULT '',
             supplier_status TEXT DEFAULT 'טרם עודכן',
             expected_date TEXT DEFAULT '',
             supplier_note TEXT DEFAULT '',
@@ -233,6 +226,17 @@ def init_db():
         )
     ''')
     
+    # הוספת עמודות אוטומטית אם בסיס הנתונים נוצר בגרסה קודמת
+    for col_sql in [
+        "ALTER TABLE orders ADD COLUMN contact_person TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN internal_status TEXT DEFAULT ''",
+        "ALTER TABLE access_keys ADD COLUMN contact_person TEXT DEFAULT ''"
+    ]:
+        try:
+            c.execute(col_sql)
+        except Exception:
+            pass
+            
     c.execute("DELETE FROM access_keys WHERE access_key IN ('ADMIN-ROEY', 'MAD-NAMER', 'MAD-MANHAR')")
     secure_keys = [
         ('BH-ADMIN-9920', 'admin', 'רועי - מנהל מערכת ראשי'),
@@ -248,31 +252,46 @@ def init_db():
 
 init_db()
 
-def get_or_create_key(conn, role, entity_name, phone=''):
+def clean_display_phone(raw_phone):
+    """מנקה מספרי טלפון מהאקסל (כמו 546966537 או 0) לתצוגה תקינה כמו 0546966537"""
+    if pd.isna(raw_phone):
+        return ''
+    p = str(raw_phone).strip().split('.')[0]
+    digits = ''.join(filter(str.isdigit, p))
+    if not digits or digits == '0' or len(digits) < 8:
+        return ''
+    if digits.startswith('972'):
+        digits = '0' + digits[3:]
+    elif len(digits) == 9 and digits.startswith('5'):
+        digits = '0' + digits
+    return digits
+
+def format_wa_phone(raw_phone):
+    """ממיר מספר טלפון לפורמט בינלאומי לוואטסאפ (972546966537)"""
+    disp = clean_display_phone(raw_phone)
+    if not disp or len(disp) < 9:
+        return None
+    if disp.startswith('05') and len(disp) == 10:
+        return '972' + disp[1:]
+    return None
+
+def get_or_create_key(conn, role, entity_name, contact_person='', phone=''):
     entity_name = str(entity_name).strip()
     if not entity_name or entity_name.lower() == 'nan':
         entity_name = 'ספק כללי'
-    row = conn.execute("SELECT access_key, phone FROM access_keys WHERE role=? AND entity_name=?", (role, entity_name)).fetchone()
+    clean_p = clean_display_phone(phone)
+    clean_c = str(contact_person).strip() if pd.notna(contact_person) and str(contact_person).strip().lower() != 'nan' else ''
+    
+    row = conn.execute("SELECT access_key, phone, contact_person FROM access_keys WHERE role=? AND entity_name=?", (role, entity_name)).fetchone()
     if row:
-        if phone and phone.lower() != 'nan' and phone.strip() != '':
-            conn.execute("UPDATE access_keys SET phone=? WHERE access_key=?", (phone, row['access_key']))
+        new_p = clean_p if clean_p else row['phone']
+        new_c = clean_c if clean_c else row['contact_person']
+        conn.execute("UPDATE access_keys SET phone=?, contact_person=? WHERE access_key=?", (new_p, new_c, row['access_key']))
         return row['access_key']
     prefix = "SUP" if role == "supplier" else "MAD"
     new_key = f"{prefix}-{secrets.token_hex(3).upper()}"
-    conn.execute("INSERT INTO access_keys (access_key, role, entity_name, phone) VALUES (?, ?, ?, ?)", (new_key, role, entity_name, phone))
+    conn.execute("INSERT INTO access_keys (access_key, role, entity_name, contact_person, phone) VALUES (?, ?, ?, ?, ?)", (new_key, role, entity_name, clean_c, clean_p))
     return new_key
-
-def format_wa_phone(raw_phone):
-    if not raw_phone or str(raw_phone).lower() == 'nan':
-        return None
-    p = ''.join(filter(str.isdigit, str(raw_phone).split('.')[0]))
-    if p.startswith('972'):
-        p = '0' + p[3:]
-    if p.startswith('5') and len(p) == 9:
-        p = '0' + p
-    if not p.startswith('05') or len(p) != 10:
-        return None
-    return '972' + p[1:]
 
 query_params = st.query_params
 url_key = query_params.get("key", "").strip().upper()
@@ -359,37 +378,38 @@ if user['role'] in ['admin', 'mador']:
             k1, k2 = st.columns(2)
             k3, k4 = st.columns(2)
             k1.metric("סה\"כ שורות הזמנה", len(df_orders))
-            k2.metric("עודכנו ע\"י ספק", len(df_orders[df_orders['supplier_status'] != 'טרם עודכן']))
-            k3.metric("בעיכוב / טרם עודכן", len(df_orders[(df_orders['supplier_status'] == 'טרם עודכן') | (df_orders['supplier_status'].str.contains('עיכוב|פיגור', na=False))]))
+            k2.metric("שורות עם מספר נייד תקין", len(df_orders[df_orders['supplier_phone'].astype(str).str.startswith('05')]))
+            k3.metric("בעיכוב / בטיפול / טרם סופק", len(df_orders[~df_orders['supplier_status'].astype(str).str.strip().eq('סופק')]))
             k4.metric("⚠️ ממתינות למענה מדור", len(df_orders[df_orders['needs_attention'] == 1]))
             
             f_col1, f_col2 = st.columns([1.5, 1])
             with f_col1:
-                search_q = st.text_input("🔍 חיפוש מהיר (ספק, הזמנה, מק\"ט או פריט):", "")
+                search_q = st.text_input("🔍 חיפוש מהיר (לפי ספק, איש קשר, טלפון, הזמנה או מק\"ט):", "")
             with f_col2:
-                display_mode = st.radio("תצוגה:", ["💻 טבלה", "📱 כרטיסיות"], horizontal=True)
+                display_mode = st.radio("תצוגה:", ["💻 טבלה מלאה", "📱 כרטיסיות (לנייד)"], horizontal=True)
                 
-            only_delayed = st.checkbox("הצג רק שורות בפיגור / ממתינות למענה מדור", value=False)
+            only_delayed = st.checkbox("הצג רק שורות פתוחות / בעיכוב (הסתר שורות שסופקו)", value=False)
                 
             view_df = df_orders.copy()
             if search_q:
                 mask = view_df.astype(str).apply(lambda x: x.str.contains(search_q, case=False, na=False)).any(axis=1)
                 view_df = view_df[mask]
             if only_delayed:
-                view_df = view_df[(view_df['needs_attention'] == 1) | (view_df['supplier_status'].str.contains('עיכוב|פיגור|טרם', na=False))]
+                view_df = view_df[~view_df['supplier_status'].astype(str).str.strip().eq('סופק')]
 
             if display_mode.startswith("📱"):
-                st.caption("🔒 נתוני הספק נעולים. לחץ על הזמנה כדי להשיב לספק.")
+                st.caption("🔒 נתוני הספק נעולים. לחץ על הזמנה לצפייה באיש הקשר, בטלפון ולהזנת מענה מדור.")
                 for _, r in view_df.iterrows():
                     alert_icon = "⚠️" if r['needs_attention'] == 1 else "📦"
-                    with st.expander(f"{alert_icon} {r['supplier_name']} | הזמנה {r['order_number']} שורה {r['line_number']} ({r['supplier_status']})"):
+                    with st.expander(f"{alert_icon} {r['supplier_name']} ({r['contact_person'] or 'ללא איש קשר'}) | הזמנה {r['order_number']} שורה {r['line_number']}"):
                         st.markdown(f"""
                         <div class="order-card-header">
-                            <strong>פריט:</strong> {r['item_description']} | <strong>מק"ט:</strong> {r['part_number']} | <strong>כמות:</strong> {r['quantity']}
+                            <strong>פריט:</strong> {r['item_description']} | <strong>מק"ט:</strong> {r['part_number']}<br>
+                            <strong>👤 איש קשר:</strong> {r['contact_person'] or '-'} | <strong>📞 טלפון:</strong> {r['supplier_phone'] or 'חסר'}
                         </div>
                         """, unsafe_allow_html=True)
-                        st.markdown(f"🔒 **סטטוס ספק:** `{r['supplier_status']}` | **צפי ספק:** `{r['expected_date'] or 'לא הוזן'}`")
-                        st.markdown(f"🔒 **הערת / בקשת ספק:** {r['supplier_note'] or 'אין הערות'}")
+                        st.markdown(f"🔒 **סטטוס עדכני:** `{r['supplier_status']}` | **צפי ספק:** `{r['expected_date'] or 'לא הוזן'}`")
+                        st.markdown(f"🔒 **תגובת / הערת ספק:** {r['supplier_note'] or 'אין הערות'}")
                         
                         new_resp = st.text_area("✍️ מענה מדור לספק:", value=r['mador_response'], key=f"mresp_{r['id']}")
                         if st.button("💾 שמור מענה לשורה זו", key=f"msave_{r['id']}", type="primary", use_container_width=True):
@@ -399,36 +419,40 @@ if user['role'] in ['admin', 'mador']:
                             st.success("מענה המדור נשמר!")
                             st.rerun()
             else:
-                st.caption("🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות ולא ניתנות לשינוי ע\"י המדור.")
+                st.caption("🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. המדור יכול לעדכן איש קשר, טלפון, מק\"ט ומענה מדור.")
                 edited_df = st.data_editor(
-                    view_df[['id', 'supplier_name', 'order_number', 'line_number', 'part_number', 'item_description', 'quantity', 'due_date', 'supplier_status', 'expected_date', 'supplier_note', 'mador_response']],
+                    view_df[['id', 'supplier_name', 'contact_person', 'supplier_phone', 'order_number', 'line_number', 'part_number', 'item_description', 'due_date', 'supplier_status', 'expected_date', 'supplier_note', 'mador_response']],
                     column_config={
                         "id": None,
-                        "supplier_name": st.column_config.TextColumn("ספק (נעול)", disabled=True),
-                        "order_number": st.column_config.TextColumn("מס' הזמנה (נעול)", disabled=True),
-                        "line_number": st.column_config.TextColumn("שורה (נעול)", disabled=True),
+                        "supplier_name": st.column_config.TextColumn("חברה / ספק", disabled=True),
+                        "contact_person": st.column_config.TextColumn("👤 איש קשר"),
+                        "supplier_phone": st.column_config.TextColumn("📞 מספר טלפון"),
+                        "order_number": st.column_config.TextColumn("מס' הזמנה", disabled=True),
+                        "line_number": st.column_config.TextColumn("שורה", disabled=True),
                         "part_number": st.column_config.TextColumn("מק\"ט"),
-                        "item_description": st.column_config.TextColumn("תיאור פריט"),
-                        "quantity": st.column_config.TextColumn("כמות"),
-                        "due_date": st.column_config.TextColumn("מועד אספקה"),
-                        "supplier_status": st.column_config.TextColumn("🔒 סטטוס ספק", disabled=True),
+                        "item_description": st.column_config.TextColumn("שם פריט"),
+                        "due_date": st.column_config.TextColumn("תאריך אספקה"),
+                        "supplier_status": st.column_config.TextColumn("🔒 סטטוס עדכני", disabled=True),
                         "expected_date": st.column_config.TextColumn("🔒 צפי ספק", disabled=True),
-                        "supplier_note": st.column_config.TextColumn("🔒 בקשת / הערת ספק", disabled=True),
+                        "supplier_note": st.column_config.TextColumn("🔒 תגובת ספק", disabled=True),
                         "mador_response": st.column_config.TextColumn("✍️ מענה מדור לספק (ערוך כאן)")
                     },
                     use_container_width=True, hide_index=True
                 )
                 
-                if st.button("💾 שמור תשובות מדור ועדכונים", type="primary", use_container_width=True):
+                if st.button("💾 שמור תשובות מדור ועדכוני אנשי קשר", type="primary", use_container_width=True):
                     now = datetime.now().strftime("%d/%m/%Y %H:%M")
                     for _, r in edited_df.iterrows():
+                        clean_p = clean_display_phone(r['supplier_phone'])
                         conn.execute('''
                             UPDATE orders 
-                            SET part_number=?, item_description=?, quantity=?, due_date=?, mador_response=?, needs_attention=0, last_updated=?
+                            SET contact_person=?, supplier_phone=?, part_number=?, item_description=?, due_date=?, mador_response=?, needs_attention=0, last_updated=?
                             WHERE id=?
-                        ''', (r['part_number'], r['item_description'], r['quantity'], r['due_date'], r['mador_response'], now, r['id']))
+                        ''', (r['contact_person'], clean_p, r['part_number'], r['item_description'], r['due_date'], r['mador_response'], now, r['id']))
+                        if clean_p or r['contact_person']:
+                            conn.execute("UPDATE access_keys SET phone=COALESCE(NULLIF(?, ''), phone), contact_person=COALESCE(NULLIF(?, ''), contact_person) WHERE role='supplier' AND entity_name=?", (clean_p, r['contact_person'], r['supplier_name']))
                     conn.commit()
-                    st.success("תשובות המדור נשמרו בהצלחה!")
+                    st.success("הנתונים ותשובות המדור נשמרו בהצלחה!")
                     st.rerun()
 
             out = BytesIO()
@@ -436,51 +460,69 @@ if user['role'] in ['admin', 'mador']:
                 df_orders.to_excel(writer, index=False, sheet_name='דוח הזמנות מתוקף')
             st.download_button("📥 הורד דוח מאוחד ל-Excel", data=out.getvalue(), file_name="SAPakim_Report.xlsx", use_container_width=True)
 
-    # --- לשונית 2: מערכת שליחת הודעות וואטסאפ אוטומטית בלחיצת כפתור ---
+    # --- לשונית 2: שליחת הודעות וואטסאפ אוטומטית (כולל אלירן מא.ד.ה.פ וכל ספק עם הזמנה פתוחה) ---
     with tab2:
-        st.markdown("##### 💬 מערך שיגור הודעות וואטסאפ אוטומטי לספקים")
+        st.markdown("##### 💬 מערך שיגור הודעות וואטסאפ אוטומטי לספקים ואנשי קשר")
         sup_query = '''
             SELECT 
                 u.entity_name AS supplier_name,
+                COALESCE(NULLIF(u.contact_person, ''), MAX(o.contact_person), '') AS contact_person,
+                COALESCE(NULLIF(u.phone, ''), MAX(o.supplier_phone), '') AS phone,
                 u.access_key,
-                COALESCE(NULLIF(u.phone, ''), MAX(o.supplier_phone)) AS phone,
                 COUNT(o.id) AS total_orders,
-                SUM(CASE WHEN o.supplier_status = 'טרם עודכן' OR o.supplier_status LIKE '%עיכוב%' OR o.supplier_status LIKE '%פיגור%' THEN 1 ELSE 0 END) AS lagging_orders
+                SUM(CASE WHEN TRIM(COALESCE(o.supplier_status, '')) != 'סופק' THEN 1 ELSE 0 END) AS open_or_delayed_orders
             FROM access_keys u
             LEFT JOIN orders o ON o.supplier_name = u.entity_name
             WHERE u.role = 'supplier'
             GROUP BY u.entity_name
-            ORDER BY lagging_orders DESC, u.entity_name
+            ORDER BY open_or_delayed_orders DESC, u.entity_name
         '''
         df_sups = pd.read_sql_query(sup_query, conn)
+        df_sups['wa_ready'] = df_sups['phone'].apply(lambda p: '✅ תקין' if format_wa_phone(p) else '❌ חסר נייד')
         
         with st.container(border=True):
             c_wa1, c_wa2 = st.columns([2, 1])
             with c_wa1:
                 filter_mode = st.radio(
-                    "1️⃣ בחר אוכלוסיית יעד לשליחה:",
-                    ["🔴 ספקים שמאחרים / טרם עדכנו בלבד", "📋 כל הספקים במערכת"],
-                    horizontal=True
+                    "1️⃣ בחר אוכלוסיית ספקים לשליחה:",
+                    [
+                        "🔴 כל הספקים עם הזמנות פתוחות / בעיכוב (שטרם סופקו)",
+                        "📱 רק ספקים עם מספר נייד תקין לוואטסאפ (כמו אלירן - א.ד.ה.פ)",
+                        "📋 כל הספקים במערכת"
+                    ]
                 )
             with c_wa2:
-                sender_name = st.text_input("שם השולח בחתימת ההודעה:", value="רועי")
+                sender_name = st.text_input("שם השולח בהודעה:", value="רועי")
                 
-            target_sups = df_sups[df_sups['lagging_orders'] > 0].copy() if filter_mode.startswith("🔴") else df_sups.copy()
+            if filter_mode.startswith("🔴"):
+                target_sups = df_sups[df_sups['open_or_delayed_orders'] > 0].copy()
+            elif filter_mode.startswith("📱"):
+                target_sups = df_sups[df_sups['phone'].apply(lambda p: format_wa_phone(p) is not None)].copy()
+            else:
+                target_sups = df_sups.copy()
+                
+            # יצירת תווית ברורה בתיבת הבחירה: "א.ד.ה.פ. תעשיות בע"מ (אלירן מלכה - 0546966537)"
+            target_sups['label'] = target_sups.apply(
+                lambda r: f"{r['supplier_name']} ({r['contact_person'] or 'ללא שם'} | {r['phone'] or 'ללא טלפון'})",
+                axis=1
+            )
+            label_to_sup = dict(zip(target_sups['label'], target_sups['supplier_name']))
             
             select_mode = st.radio(
                 "2️⃣ בחר אופן סימון ספקים:",
-                [f"✅ כל הספקים ברשימה זו ({len(target_sups)} ספקים)", "🎯 בחירה ידנית של חלק מהספקים"],
+                [f"✅ כל הספקים ברשימה זו ({len(target_sups)} ספקים)", "🎯 בחירה ידנית של ספקים בודדים (למשל אלירן מא.ד.ה.פ)"],
                 horizontal=True
             )
             
             if select_mode.startswith("✅"):
                 selected_suppliers = target_sups['supplier_name'].tolist()
             else:
-                selected_suppliers = st.multiselect(
-                    "בחר את הספקים הרצויים מהרשימה:",
-                    options=target_sups['supplier_name'].tolist(),
-                    default=[]
+                chosen_labels = st.multiselect(
+                    "בחר ספק / איש קשר מהרשימה:",
+                    options=target_sups['label'].tolist(),
+                    default=target_sups['label'].tolist()[:1] if not target_sups.empty else []
                 )
+                selected_suppliers = [label_to_sup[lbl] for lbl in chosen_labels]
         
         app_url = "https://sapakim-kukmcxaux8yf9tfjrygif9.streamlit.app"
         
@@ -489,15 +531,22 @@ if user['role'] in ['admin', 'mador']:
             for s_name in selected_suppliers:
                 s_row = df_sups[df_sups['supplier_name'] == s_name].iloc[0]
                 clean_p = format_wa_phone(s_row['phone'])
+                disp_p = s_row['phone']
+                contact_p = s_row['contact_person']
                 s_key = s_row['access_key']
                 
-                s_ords = conn.execute("SELECT order_number, line_number, item_description FROM orders WHERE supplier_name=?", (s_name,)).fetchall()
-                ord_lines = "\n".join([f"• הזמנה {o['order_number']} שורה {o['line_number']} ({o['item_description']})" for o in s_ords[:8]])
+                greeting_name = f"{contact_p} ({s_name})" if contact_p else s_name
+                
+                s_ords = conn.execute("SELECT order_number, line_number, item_description FROM orders WHERE supplier_name=? AND TRIM(COALESCE(supplier_status, '')) != 'סופק'", (s_name,)).fetchall()
+                if not s_ords:
+                    s_ords = conn.execute("SELECT order_number, line_number, item_description FROM orders WHERE supplier_name=?", (s_name,)).fetchall()
+                    
+                ord_lines = "\n".join([f"• הזמנה {o['order_number']} שורה {o['line_number']} - {o['item_description']}" for o in s_ords[:10]])
                 
                 direct_link = f"{app_url}/?key={s_key}"
                 msg = (
-                    f"היי {s_name}, מה נשמע?\n"
-                    f"זה {sender_name} מהחט\"ל. אני עובר על ההזמנות הפתוחות שלנו וראיתי שיש לנו פער בלוח הזמנים בפריטים הבאים:\n"
+                    f"היי {greeting_name}, מה נשמע?\n"
+                    f"זה {sender_name} מהחט\"ל. אני עובר על דו\"ח ההזמנות הפתוחות שלנו וראיתי שיש לנו פער בלוח הזמנים בפריטים הבאים:\n"
                     f"{ord_lines}\n\n"
                     f"כדי לעדכן סטטוס וצפי אספקה בלחיצה אחת (ולכתוב לנו אם נדרש מענה מהמדור), היכנסו לקישור האישי שלכם:\n"
                     f"{direct_link}\n"
@@ -508,74 +557,88 @@ if user['role'] in ['admin', 'mador']:
                 if clean_p:
                     wa_web_url = f"https://web.whatsapp.com/send?phone={clean_p}&text={urllib.parse.quote(msg)}"
                     wa_me_url = f"https://wa.me/{clean_p}?text={urllib.parse.quote(msg)}"
-                    wa_links.append((s_name, s_key, clean_p, wa_web_url, wa_me_url, msg))
+                    wa_links.append((s_name, contact_p, disp_p, s_key, clean_p, wa_web_url, wa_me_url, msg))
                 else:
-                    wa_links.append((s_name, s_key, None, None, None, msg))
+                    wa_links.append((s_name, contact_p, disp_p, s_key, None, None, None, msg))
             
-            valid_items = [item for item in wa_links if item[2] is not None]
+            valid_items = [item for item in wa_links if item[4] is not None]
             st.markdown(f"##### 3️⃣ שיגור אוטומטי ל-{len(valid_items)} ספקים בעלי מספר נייד תקין:")
             
-            btn_c1, btn_c2 = st.columns(2)
-            with btn_c1:
-                if valid_items and st.button(f"🚀 שגר עכשיו בלחיצה לכל {len(valid_items)} הספקים (פתיחה מתוזמנת בדפדפן)", type="primary", use_container_width=True):
-                    # פותח את הצ'אטים בדיליי מדורג כדי לא לתקוע את הדפדפן
-                    js_code = "<script>"
-                    for idx, item in enumerate(valid_items):
-                        delay_ms = idx * 1200
-                        js_code += f"setTimeout(function(){{ window.open('{item[4]}', '_blank'); }}, {delay_ms});"
-                    js_code += "</script>"
-                    components.html(js_code, height=0)
-                    st.success(f"משגר כעת {len(valid_items)} שיחות וואטסאפ! (וודא שחלונות קופצים Pop-ups מאושרים בדפדפן).")
+            if not valid_items:
+                st.warning("שים לב: לספקים שסימנת אין מספר טלפון נייד תקין באקסל (או שכתוב אצלם 0). אם טענת את האקסל לפני העדכון האחרון, גש ללשונית '📥 טעינת אקסל' וטען שוב את הקובץ כדי שהמספר של אלירן (0546966537) ייקלט!")
+            else:
+                btn_c1, btn_c2 = st.columns(2)
+                with btn_c1:
+                    if st.button(f"🚀 שגר עכשיו בלחיצה לכל {len(valid_items)} הספקים שנבחרו", type="primary", use_container_width=True):
+                        js_code = "<script>"
+                        for idx, item in enumerate(valid_items):
+                            delay_ms = idx * 1200
+                            js_code += f"setTimeout(function(){{ window.open('{item[6]}', '_blank'); }}, {delay_ms});"
+                        js_code += "</script>"
+                        components.html(js_code, height=0)
+                        st.success(f"פותח כעת {len(valid_items)} שיחות וואטסאפ! (אם נחסמו חלונות קופצים בדפדפן, לחץ על הכפתור הישיר של כל ספק למטה).")
 
-            with btn_c2:
-                if valid_items and st.button(f"🤖 שגר אוטומטית מלא (Selenium במחשב מקומי)", use_container_width=True):
-                    try:
-                        from selenium import webdriver
-                        from selenium.webdriver.common.by import By
-                        from selenium.webdriver.support.ui import WebDriverWait
-                        from selenium.webdriver.support import expected_conditions as EC
-                        
-                        st.info("מפעיל דפדפן אוטומטי... וודא שנסרק ה-QR ב-WhatsApp Web.")
-                        options = webdriver.ChromeOptions()
-                        options.add_argument(r"user-data-dir=C:\selenium_whatsapp_profile")
-                        driver = webdriver.Chrome(options=options)
-                        progress = st.progress(0)
-                        
-                        for idx, (s_name, s_key, clean_p, wa_web_url, _, _) in enumerate(valid_items):
-                            driver.get(wa_web_url)
-                            try:
-                                send_btn = WebDriverWait(driver, 30).until(
-                                    EC.element_to_be_clickable((By.XPATH, '//span[@data-icon="send"]/ancestor::button | //button[@aria-label="שליחה"] | //span[@data-icon="send"]'))
-                                )
-                                time.sleep(2)
-                                send_btn.click()
-                                time.sleep(6)
-                            except Exception:
-                                pass
-                            progress.progress((idx + 1) / len(valid_items))
-                        driver.quit()
-                        st.success("כל ההודעות נשלחו אוטומטית בהצלחה!")
-                    except Exception:
-                        st.warning("שיגור Selenium ללא מגע יד זמין כאשר מריצים את המערכת מקומית על המחשב המשרדי. מהענן השתמש בכפתור השמאלי ('🚀 שגר עכשיו בלחיצה').")
+                with btn_c2:
+                    if st.button(f"🤖 שגר אוטומטית מלא (Selenium במחשב מקומי)", use_container_width=True):
+                        try:
+                            from selenium import webdriver
+                            from selenium.webdriver.common.by import By
+                            from selenium.webdriver.support.ui import WebDriverWait
+                            from selenium.webdriver.support import expected_conditions as EC
+                            
+                            options = webdriver.ChromeOptions()
+                            options.add_argument(r"user-data-dir=C:\selenium_whatsapp_profile")
+                            driver = webdriver.Chrome(options=options)
+                            progress = st.progress(0)
+                            
+                            for idx, item in enumerate(valid_items):
+                                driver.get(item[5])
+                                try:
+                                    send_btn = WebDriverWait(driver, 30).until(
+                                        EC.element_to_be_clickable((By.XPATH, '//span[@data-icon="send"]/ancestor::button | //button[@aria-label="שליחה"] | //span[@data-icon="send"]'))
+                                    )
+                                    time.sleep(2)
+                                    send_btn.click()
+                                    time.sleep(6)
+                                except Exception:
+                                    pass
+                                progress.progress((idx + 1) / len(valid_items))
+                            driver.quit()
+                            st.success("כל ההודעות נשלחו אוטומטית בהצלחה!")
+                        except Exception:
+                            st.warning("שיגור Selenium ללא מגע יד זמין בהרצה מקומית על המחשב. מהענן השתמש בכפתור השמאלי או בכפתורים הישירים למטה.")
 
             st.write("")
-            for s_name, s_key, clean_p, _, wa_me_url, msg in wa_links:
-                with st.expander(f"📲 {s_name} | מפתח: {s_key} | נייד: {clean_p or 'חסר מספר נייד'}"):
+            for s_name, contact_p, disp_p, s_key, clean_p, _, wa_me_url, msg in wa_links:
+                title_str = f"📲 {s_name} | 👤 איש קשר: {contact_p or 'לא צוין'} | 📞 טלפון: {disp_p or 'חסר'} | 🔑 מפתח: {s_key}"
+                with st.expander(title_str, expanded=(clean_p is not None and len(wa_links) <= 3)):
                     if wa_me_url:
-                        st.link_button(f"💬 שלח וואטסאפ ישירות ל-{s_name}", wa_me_url, type="primary", use_container_width=True)
+                        st.link_button(f"💬 שלח וואטסאפ עכשיו אל {contact_p or s_name} ({disp_p})", wa_me_url, type="primary", use_container_width=True)
                     else:
-                        st.warning("אין מספר נייד תקין באקסל. העתק הודעה:")
+                        st.warning("לספק זה רשום '0' או שאין מספר נייד באקסל. תוכל להוסיף לו מספר בלשונית הטבלה הראשונה או להעתיק את ההודעה:")
                     st.code(msg, language="text")
                     
         st.divider()
-        with st.expander("🔑 צפייה בכל מפתחות הגישה של הספקים"):
-            st.dataframe(df_sups, use_container_width=True, hide_index=True)
+        with st.expander("🔑 טבלת ריכוז ספקים, אנשי קשר, טלפונים ומפתחות גישה"):
+            st.dataframe(
+                df_sups.rename(columns={
+                    'supplier_name': 'חברה / ספק',
+                    'contact_person': 'איש קשר',
+                    'phone': 'מספר טלפון',
+                    'access_key': 'מפתח גישה',
+                    'total_orders': 'סה"כ שורות',
+                    'open_or_delayed_orders': 'שורות פתוחות',
+                    'wa_ready': 'סטטוס וואטסאפ'
+                }),
+                use_container_width=True, hide_index=True
+            )
 
-    # --- לשונית 3: טעינת אקסל ---
+    # --- לשונית 3: טעינת אקסל מלאה (מותאמת ב-100% לעמודות התמונה ששלחת!) ---
     with tab3:
-        st.markdown("##### 📥 טעינת קובץ אקסל מהרשת הסגורה")
+        st.markdown("##### 📥 טעינת קובץ אקסל (`suppliers.xlsx`) - קליטת איש קשר, טלפון, צפי וסטטוסים")
+        st.info("💡 **חשוב:** העלה כאן שוב את קובץ ה-`suppliers.xlsx` שלך ולחץ על הכפתור כדי שהעמודות `איש קשר` (כמו אלירן מלכה) ו-`מספר טלפון` (`0546966537`) יתעדכנו בכל השורות!")
         uploaded = st.file_uploader("בחר קובץ Excel או CSV", type=['xlsx', 'xls', 'csv'])
-        if uploaded and st.button("טען וסנכרן הזמנות למערכת ⚡", type="primary", use_container_width=True):
+        if uploaded and st.button("טען וסנכרן הזמנות ואנשי קשר למערכת ⚡", type="primary", use_container_width=True):
             df_in = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
             df_in.columns = df_in.columns.str.strip()
             count = 0
@@ -584,39 +647,63 @@ if user['role'] in ['admin', 'mador']:
                 line_num = str(r.get('שורה', '10')).split('.')[0].strip()
                 if not ord_num or ord_num.lower() == 'nan':
                     continue
+                    
                 sup = str(r.get('חברה', r.get('שם ספק', r.get('ספק', 'ספק כללי')))).strip()
-                phone = str(r.get('פרטי התקשרות', r.get('טלפון', r.get('מספר טלפון', '')))).split('.')[0].strip()
+                contact = str(r.get('איש קשר', '')).strip()
+                raw_phone = r.get('מספר טלפון', r.get('טלפון', r.get('פרטי התקשרות', '')))
+                phone = clean_display_phone(raw_phone)
+                
                 part = str(r.get('מק"ט', r.get('מקט', ''))).split('.')[0].strip()
                 desc = str(r.get('שם פריט', r.get('פרט', r.get('תיאור', '')))).strip()
                 qty = str(r.get('כמה הוזמנו', r.get('כמות', '1'))).split('.')[0].strip()
-                due = str(r.get('אספקה', r.get('תאריך אספקה', ''))).strip()
+                due = str(r.get('תאריך אספקה', r.get('אספקה', ''))).split(' ')[0].strip()
                 
-                if phone.lower() == 'nan': phone = ''
-                if part.lower() == 'nan': part = ''
-                if desc.lower() == 'nan': desc = ''
-                if due.lower() == 'nan': due = ''
+                # קליטת העמודות הקיימות מהאקסל שלך (סטטוס אחרון, צפי ספק, סטטוס עדכני, תגובת ספק)
+                internal_st = str(r.get('סטטוס אחרון', '')).strip()
+                exp_date = str(r.get('צפי ספק', r.get('צפי_אספקה_מעודכן', ''))).split(' ')[0].strip()
+                sup_st = str(r.get('סטטוס עדכני', '')).strip()
+                sup_note = str(r.get('תגובת ספק', '')).strip()
+                last_upd = str(r.get('תאריך_עדכון_אחרון', r.get('תאריך עדכון', ''))).strip()
                 
-                if not phone:
-                    mem = conn.execute("SELECT phone FROM access_keys WHERE role='supplier' AND entity_name=? AND phone!=''", (sup,)).fetchone()
+                for var_n in ['contact', 'part', 'desc', 'due', 'internal_st', 'exp_date', 'sup_st', 'sup_note', 'last_upd']:
+                    if locals()[var_n].lower() == 'nan':
+                        locals()[var_n] = ''
+                        
+                if not sup_st:
+                    sup_st = internal_st if internal_st else 'טרם עודכן'
+                
+                # שליפת טלפון או איש קשר מהזיכרון אם חסר בשורה הנוכחית
+                if not phone or not contact:
+                    mem = conn.execute("SELECT phone, contact_person FROM access_keys WHERE role='supplier' AND entity_name=?", (sup,)).fetchone()
                     if mem:
-                        phone = mem['phone']
+                        if not phone and mem['phone']: phone = mem['phone']
+                        if not contact and mem['contact_person']: contact = mem['contact_person']
                 
-                get_or_create_key(conn, 'supplier', sup, phone)
+                get_or_create_key(conn, 'supplier', sup, contact, phone)
+                
                 conn.execute('''
-                    INSERT INTO orders (order_number, line_number, part_number, item_description, quantity, supplier_name, supplier_phone, due_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO orders (
+                        order_number, line_number, part_number, item_description, quantity,
+                        supplier_name, contact_person, supplier_phone, due_date,
+                        internal_status, supplier_status, expected_date, supplier_note, last_updated
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(order_number, line_number) DO UPDATE SET
                         part_number=CASE WHEN excluded.part_number!='' THEN excluded.part_number ELSE orders.part_number END,
                         item_description=CASE WHEN excluded.item_description!='' THEN excluded.item_description ELSE orders.item_description END,
-                        quantity=excluded.quantity,
                         supplier_name=excluded.supplier_name,
-                        supplier_phone=CASE WHEN excluded.supplier_phone!='' THEN excluded.supplier_phone ELSE orders.supplier_phone END
-                ''', (ord_num, line_num, part, desc, qty, sup, phone, due))
+                        contact_person=CASE WHEN excluded.contact_person!='' THEN excluded.contact_person ELSE orders.contact_person END,
+                        supplier_phone=CASE WHEN excluded.supplier_phone!='' THEN excluded.supplier_phone ELSE orders.supplier_phone END,
+                        due_date=CASE WHEN excluded.due_date!='' THEN excluded.due_date ELSE orders.due_date END,
+                        supplier_status=CASE WHEN orders.supplier_status='טרם עודכן' AND excluded.supplier_status!='' THEN excluded.supplier_status ELSE orders.supplier_status END,
+                        expected_date=CASE WHEN orders.expected_date='' AND excluded.expected_date!='' THEN excluded.expected_date ELSE orders.expected_date END,
+                        supplier_note=CASE WHEN orders.supplier_note='' AND excluded.supplier_note!='' THEN excluded.supplier_note ELSE orders.supplier_note END
+                ''', (ord_num, line_num, part, desc, qty, sup, contact, phone, due, internal_st, sup_st, exp_date, sup_note, last_upd))
                 count += 1
             conn.commit()
-            st.success(f"נסרקו ועודכנו {count} שורות הזמנה בהצלחה!")
+            st.success(f"נסרקו ועודכנו {count} שורות הזמנה בהצלחה (כולל אנשי קשר ומספרי טלפון)!")
 
-# ==================== 4. מסך ספק (מותאם לנייד עם טקסט כהה וברור 100%) ====================
+# ==================== 4. מסך ספק ====================
 else:
     st.markdown(f"##### 📦 ההזמנות הפתוחות של: {user['entity_name']}")
     
@@ -631,7 +718,7 @@ else:
             horizontal=True
         )
         
-        status_options = ["טרם עודכן", "תקין - בייצור", "מוכן לאספקה", "ממתין לבק\"מ", "חסר שרטוט / דרוש מענה מדור", "עיכוב / בפיגור", "סופק"]
+        status_options = ["טרם עודכן", "תקין - בייצור", "בטיפול - שבוע הבא", "בטיפול מיידי", "מוכן לאספקה", "ממתין לבק\"מ", "חסר שרטוט / דרוש מענה מדור", "מעוכב - חוסר חומר גלם", "עיכוב / בפיגור", "סופק"]
         
         if sup_view.startswith("📱"):
             st.caption("🔒 פרטי ההזמנה ותשובות המדור נעולים. מלאו את הסטטוס והצפי לכל פריט ולחצו על כפתור השמירה בתחתית הדף.")
@@ -647,29 +734,30 @@ else:
                         </div>
                         <div>
                             <span class="locked-badge">🔒 מק"ט: {row['part_number'] or '-'}</span>
-                            <span class="locked-badge">🔒 כמות: {row['quantity']}</span>
                             <span class="locked-badge">🔒 יעד: {row['due_date'] or '-'}</span>
+                            <span class="locked-badge">👤 איש קשר: {row['contact_person'] or '-'}</span>
                         </div>
                         """, unsafe_allow_html=True)
                         
                         if row['mador_response']:
                             st.info(f"💬 **מענה מדור חט\"ל (נעול):** {row['mador_response']}")
                             
-                        curr_idx = status_options.index(row['supplier_status']) if row['supplier_status'] in status_options else 0
+                        curr_st = row['supplier_status'] if row['supplier_status'] in status_options else "טרם עודכן"
+                        curr_idx = status_options.index(curr_st)
                         
                         c_m1, c_m2 = st.columns(2)
                         with c_m1:
-                            new_st = st.selectbox("✍️ סטטוס הזמנה:", options=status_options, index=curr_idx, key=f"st_{row['id']}")
+                            new_st = st.selectbox("✍️ סטטוס עדכני:", options=status_options, index=curr_idx, key=f"st_{row['id']}")
                         with c_m2:
-                            new_dt = st.text_input("✍️ צפי אספקה (תאריך/שבוע):", value=row['expected_date'], placeholder="למשל: 15/11/2026", key=f"dt_{row['id']}")
+                            new_dt = st.text_input("✍️ צפי ספק (תאריך):", value=row['expected_date'], placeholder="למשל: 15/09/2026", key=f"dt_{row['id']}")
                             
-                        new_nt = st.text_input("✍️ הערה / בקשה למדור:", value=row['supplier_note'], placeholder="פרט סיבת עיכוב או בקשה לשרטוט...", key=f"nt_{row['id']}")
+                        new_nt = st.text_input("✍️ תגובת ספק / בקשה למדור:", value=row['supplier_note'], placeholder="פרט סיבת עיכוב או בקשה...", key=f"nt_{row['id']}")
                         updates_to_save.append((row['id'], new_st, new_dt, new_nt))
                         
                 if st.form_submit_button("✅ שמור ושלח את כל העדכונים לחט\"ל", type="primary", use_container_width=True):
                     now = datetime.now().strftime("%d/%m/%Y %H:%M")
                     for oid, st_val, dt_val, nt_val in updates_to_save:
-                        flag = 1 if (str(nt_val).strip() or 'שרטוט' in str(st_val) or 'עיכוב' in str(st_val)) else 0
+                        flag = 1 if (str(nt_val).strip() or 'שרטוט' in str(st_val) or 'עיכוב' in str(st_val) or 'מעוכב' in str(st_val)) else 0
                         conn.execute('''
                             UPDATE orders 
                             SET supplier_status=?, expected_date=?, supplier_note=?, needs_attention=?, last_updated=?
@@ -680,19 +768,20 @@ else:
                     st.rerun()
         else:
             st.caption("🔒 פרטי ההזמנה ותשובות המדור נעולים לשינוי.")
+            df_sup_edit = df_sup.copy()
+            df_sup_edit['supplier_status'] = df_sup_edit['supplier_status'].apply(lambda x: x if x in status_options else "טרם עודכן")
             edited_sup = st.data_editor(
-                df_sup[['id', 'order_number', 'line_number', 'part_number', 'item_description', 'quantity', 'due_date', 'supplier_status', 'expected_date', 'supplier_note', 'mador_response']],
+                df_sup_edit[['id', 'order_number', 'line_number', 'part_number', 'item_description', 'due_date', 'supplier_status', 'expected_date', 'supplier_note', 'mador_response']],
                 column_config={
                     "id": None,
                     "order_number": st.column_config.TextColumn("🔒 מס' הזמנה", disabled=True),
                     "line_number": st.column_config.TextColumn("🔒 שורה", disabled=True),
                     "part_number": st.column_config.TextColumn("🔒 מק\"ט", disabled=True),
-                    "item_description": st.column_config.TextColumn("🔒 תיאור פריט", disabled=True),
-                    "quantity": st.column_config.TextColumn("🔒 כמות", disabled=True),
-                    "due_date": st.column_config.TextColumn("🔒 תאריך חוזי", disabled=True),
-                    "supplier_status": st.column_config.SelectboxColumn("✍️ סטטוס הזמנה", options=status_options, required=True),
-                    "expected_date": st.column_config.TextColumn("✍️ צפי אספקה"),
-                    "supplier_note": st.column_config.TextColumn("✍️ הערה / בקשה למדור"),
+                    "item_description": st.column_config.TextColumn("🔒 שם פריט", disabled=True),
+                    "due_date": st.column_config.TextColumn("🔒 תאריך אספקה", disabled=True),
+                    "supplier_status": st.column_config.SelectboxColumn("✍️ סטטוס עדכני", options=status_options, required=True),
+                    "expected_date": st.column_config.TextColumn("✍️ צפי ספק"),
+                    "supplier_note": st.column_config.TextColumn("✍️ תגובת ספק"),
                     "mador_response": st.column_config.TextColumn("🔒 מענה מדור חט\"ל", disabled=True)
                 },
                 use_container_width=True, hide_index=True
@@ -701,7 +790,7 @@ else:
             if st.button("✅ שמור ושלח עדכונים לחט\"ל", type="primary", use_container_width=True):
                 now = datetime.now().strftime("%d/%m/%Y %H:%M")
                 for _, r in edited_sup.iterrows():
-                    flag = 1 if (str(r['supplier_note']).strip() or 'שרטוט' in str(r['supplier_status']) or 'עיכוב' in str(r['supplier_status'])) else 0
+                    flag = 1 if (str(r['supplier_note']).strip() or 'שרטוט' in str(r['supplier_status']) or 'עיכוב' in str(r['supplier_status']) or 'מעוכב' in str(r['supplier_status'])) else 0
                     conn.execute('''
                         UPDATE orders 
                         SET supplier_status=?, expected_date=?, supplier_note=?, needs_attention=?, last_updated=?
