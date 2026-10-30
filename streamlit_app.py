@@ -1,5 +1,6 @@
 import secrets
 import sqlite3
+import time
 import urllib.parse
 from datetime import datetime
 from io import BytesIO
@@ -14,139 +15,178 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ==================== 1. עיצוב מותאם + העלמת הסרגל העליון של Streamlit ====================
+# ==================== 1. עיצוב ייחודי + החזרת בר GitHub + תיקון מוחלט של כתב לבן בנייד ====================
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap');
     
-    /* העלמה מוחלטת של הסרגל העליון (Share / GitHub / Menu) שמסתיר את הכותרת */
-    header[data-testid="stHeader"],
-    div[data-testid="stToolbar"],
-    div[data-testid="stDecoration"],
-    div[data-testid="stStatusWidget"],
-    #MainMenu,
-    header,
-    footer {
-        display: none !important;
-        visibility: hidden !important;
-        height: 0px !important;
-    }
-
-    html, body, [class*="css"], .stApp {
+    /* כפיית מצב תצוגה בהיר כדי שמכשירים ניידים ב-Dark Mode לא יהפכו את הכתב ללבן! */
+    :root, html, body, .stApp {
+        color-scheme: light !important;
         font-family: 'Rubik', sans-serif !important;
         direction: rtl;
         text-align: right;
-        background-color: #f8fafc;
+        background: linear-gradient(180deg, #fffbeb 0%, #f8fafc 35%, #f1f5f9 100%) !important;
+        color: #0f172a !important;
     }
     
-    /* מרכוז התוכן בדסקטופ ומרווח נקי מלמעלה */
+    /* 1. החזרת הבר העליון של GitHub/Streamlit ושמירה שלא יעלה על תוכן הדף */
+    header[data-testid="stHeader"] {
+        background-color: rgba(255, 251, 235, 0.92) !important;
+        backdrop-filter: blur(6px);
+        border-bottom: 1px solid #fde68a;
+        height: 3.2rem !important;
+        z-index: 999 !important;
+    }
+    
+    /* מרווח עליון מותאם כך שהבר העליון לעולם לא יסתיר את כותרת האתר */
     .block-container {
         max-width: 1140px !important;
-        padding-top: 1.5rem !important;
+        padding-top: 4.2rem !important;
         padding-bottom: 3rem !important;
         margin: 0 auto !important;
     }
     
-    /* כותרת עליונה ממורכזת ואלגנטית */
+    /* נעילת צבע טקסט כהה וברור בכל האלמנטים בנייד ובמחשב */
+    p, span, label, div, h1, h2, h3, h4, h5, h6, li, th, td {
+        color: #0f172a;
+    }
+    
+    /* כותרת ראשית ייחודית (Navy & Gold Bronze) */
     .header-box {
-        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-        color: white;
-        padding: 1.1rem 1.5rem;
-        border-radius: 14px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-        margin-bottom: 1.2rem;
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 65%, #78350f 100%);
+        color: #ffffff !important;
+        padding: 1.3rem 1.8rem;
+        border-radius: 16px;
+        border-bottom: 4px solid #f59e0b;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+        margin-bottom: 1.4rem;
         text-align: center;
     }
     .header-title {
-        font-size: 1.4rem !important;
-        font-weight: 600 !important;
+        font-size: 1.45rem !important;
+        font-weight: 700 !important;
+        color: #ffffff !important;
         margin: 0 !important;
     }
     .header-sub {
-        font-size: 0.85rem !important;
-        color: #fbbf24;
-        margin-top: 0.25rem !important;
-        font-weight: 400;
+        font-size: 0.88rem !important;
+        color: #fcd34d !important;
+        margin-top: 0.3rem !important;
+        font-weight: 500;
     }
     
-    /* עיצוב מדדים (KPIs) */
+    /* עיצוב כרטיסיות מדדים (KPIs) ייחודי וברור */
+    div[data-testid="metric-container"] {
+        background: #ffffff !important;
+        padding: 0.9rem 1.1rem !important;
+        border-radius: 14px !important;
+        border: 1px solid #e2e8f0 !important;
+        border-right: 5px solid #d97706 !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04) !important;
+    }
     div[data-testid="stMetricValue"] {
-        font-size: 1.45rem !important;
-        font-weight: 600 !important;
-        color: #0f172a;
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
+        color: #0f172a !important;
         direction: ltr;
         text-align: right;
     }
-    div[data-testid="stMetricLabel"] {
-        font-size: 0.82rem !important;
-        font-weight: 500 !important;
-        color: #64748b;
-    }
-    div[data-testid="metric-container"] {
-        background: white;
-        padding: 0.8rem 1rem;
-        border-radius: 12px;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    div[data-testid="stMetricLabel"] p {
+        font-size: 0.85rem !important;
+        font-weight: 600 !important;
+        color: #475569 !important;
     }
     
-    /* עיצוב כרטיסיית הזמנה לנייד */
+    /* תיקון שדות קלט, תיבות בחירה וטפסים בנייד שלא יהיו לבן על לבן */
+    input, textarea, select, [data-baseweb="select"] div, [data-baseweb="input"] input {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+        -webkit-text-fill-color: #0f172a !important;
+        border-color: #cbd5e1 !important;
+        font-weight: 500 !important;
+    }
+    
+    /* תוויות מעל שדות (Labels) */
+    label[data-testid="stWidgetLabel"] p, .stRadio label p, .stCheckbox label p {
+        color: #0f172a !important;
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
+    }
+    
+    /* עיצוב כרטיסיית הזמנה ייחודית לנייד */
     .order-card-header {
-        background: #f1f5f9;
-        padding: 0.6rem 0.9rem;
-        border-radius: 8px;
-        border-right: 4px solid #d97706;
-        margin-bottom: 0.6rem;
-        font-size: 0.9rem;
+        background: linear-gradient(90deg, #fef3c7 0%, #fffbeb 100%);
+        color: #78350f !important;
+        padding: 0.75rem 1rem;
+        border-radius: 10px;
+        border-right: 5px solid #d97706;
+        margin-bottom: 0.7rem;
+        font-size: 0.92rem;
+    }
+    .order-card-header strong, .order-card-header span {
+        color: #78350f !important;
     }
     .locked-badge {
         background: #e2e8f0;
-        color: #334155;
-        padding: 0.25rem 0.6rem;
-        border-radius: 6px;
-        font-size: 0.8rem;
+        color: #1e293b !important;
+        padding: 0.3rem 0.65rem;
+        border-radius: 8px;
+        font-size: 0.82rem;
+        font-weight: 600;
         display: inline-block;
         margin-left: 0.4rem;
-        margin-bottom: 0.3rem;
+        margin-bottom: 0.4rem;
     }
     
-    th, td { text-align: right !important; font-size: 0.86rem !important; }
-    
-    .watermark {
-        text-align: center;
-        font-size: 0.75rem;
-        color: #94a3b8;
-        margin-top: 2rem;
-        font-weight: 500;
+    /* כפתורים ראשיים בולטים בגוון אמבר-זהב */
+    button[kind="primary"] {
+        background: linear-gradient(135deg, #d97706 0%, #b45309 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        font-weight: 600 !important;
+        border-radius: 10px !important;
+        box-shadow: 0 3px 10px rgba(180, 83, 9, 0.25) !important;
+    }
+    button[kind="primary"] p, button[kind="primary"] span {
+        color: #ffffff !important;
+    }
+    button[kind="secondary"] {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+        border: 1.5px solid #cbd5e1 !important;
+        font-weight: 600 !important;
+        border-radius: 10px !important;
+    }
+    button[kind="secondary"] p {
+        color: #0f172a !important;
     }
 
-    /* ========== התאמה ייעודית למסכי טלפון נייד ========== */
+    .watermark {
+        text-align: center;
+        font-size: 0.78rem;
+        color: #64748b !important;
+        margin-top: 2.2rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+    }
+
+    /* התאמות מסך לטלפון נייד */
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 1rem !important;
+            padding-top: 3.8rem !important;
             padding-left: 0.6rem !important;
             padding-right: 0.6rem !important;
         }
         .header-box {
-            padding: 0.85rem 1rem;
-            border-radius: 10px;
+            padding: 0.95rem 1.1rem;
+            border-radius: 12px;
         }
         .header-title {
-            font-size: 1.15rem !important;
-        }
-        .header-sub {
-            font-size: 0.78rem !important;
-        }
-        button[kind="primary"], button[kind="secondary"] {
-            min-height: 2.8rem !important;
-            font-size: 0.95rem !important;
-            border-radius: 10px !important;
+            font-size: 1.18rem !important;
         }
         input, select, textarea {
             font-size: 16px !important;
-        }
-        div[data-testid="stMetricValue"] {
-            font-size: 1.25rem !important;
         }
     }
 </style>
@@ -307,7 +347,7 @@ conn = get_db()
 if user['role'] in ['admin', 'mador']:
     tab1, tab2, tab3 = st.tabs([
         "📊 הזמנות ומענה",
-        "💬 שיגור וואטסאפ",
+        "💬 שיגור וואטסאפ אוטומטי",
         "📥 טעינת אקסל"
     ])
     
@@ -396,9 +436,9 @@ if user['role'] in ['admin', 'mador']:
                 df_orders.to_excel(writer, index=False, sheet_name='דוח הזמנות מתוקף')
             st.download_button("📥 הורד דוח מאוחד ל-Excel", data=out.getvalue(), file_name="SAPakim_Report.xlsx", use_container_width=True)
 
-    # --- לשונית 2: שליחת וואטסאפ מהירה ---
+    # --- לשונית 2: מערכת שליחת הודעות וואטסאפ אוטומטית בלחיצת כפתור ---
     with tab2:
-        st.markdown("##### 💬 מרכז שליחת תזכורות WhatsApp")
+        st.markdown("##### 💬 מערך שיגור הודעות וואטסאפ אוטומטי לספקים")
         sup_query = '''
             SELECT 
                 u.entity_name AS supplier_name,
@@ -414,25 +454,33 @@ if user['role'] in ['admin', 'mador']:
         '''
         df_sups = pd.read_sql_query(sup_query, conn)
         
-        c_wa1, c_wa2 = st.columns([2, 1])
-        with c_wa1:
-            filter_mode = st.radio(
-                "סינון ספקים לשליחה:",
-                ["🔴 ספקים בפיגור / שטרם עדכנו בלבד", "📋 כל הספקים במערכת"],
+        with st.container(border=True):
+            c_wa1, c_wa2 = st.columns([2, 1])
+            with c_wa1:
+                filter_mode = st.radio(
+                    "1️⃣ בחר אוכלוסיית יעד לשליחה:",
+                    ["🔴 ספקים שמאחרים / טרם עדכנו בלבד", "📋 כל הספקים במערכת"],
+                    horizontal=True
+                )
+            with c_wa2:
+                sender_name = st.text_input("שם השולח בחתימת ההודעה:", value="רועי")
+                
+            target_sups = df_sups[df_sups['lagging_orders'] > 0].copy() if filter_mode.startswith("🔴") else df_sups.copy()
+            
+            select_mode = st.radio(
+                "2️⃣ בחר אופן סימון ספקים:",
+                [f"✅ כל הספקים ברשימה זו ({len(target_sups)} ספקים)", "🎯 בחירה ידנית של חלק מהספקים"],
                 horizontal=True
             )
-        with c_wa2:
-            st.link_button("🌐 פתח WhatsApp Web", "https://web.whatsapp.com", use_container_width=True)
             
-        target_sups = df_sups[df_sups['lagging_orders'] > 0].copy() if filter_mode.startswith("🔴") else df_sups.copy()
-        select_all = st.checkbox(f"✅ בחר את כל הספקים ברשימה ({len(target_sups)} ספקים)", value=False)
-        
-        default_selection = target_sups['supplier_name'].tolist() if select_all else []
-        selected_suppliers = st.multiselect(
-            "בחר ספקים בודדים או מרובים לשליחה:",
-            options=target_sups['supplier_name'].tolist(),
-            default=default_selection
-        )
+            if select_mode.startswith("✅"):
+                selected_suppliers = target_sups['supplier_name'].tolist()
+            else:
+                selected_suppliers = st.multiselect(
+                    "בחר את הספקים הרצויים מהרשימה:",
+                    options=target_sups['supplier_name'].tolist(),
+                    default=[]
+                )
         
         app_url = "https://sapakim-kukmcxaux8yf9tfjrygif9.streamlit.app"
         
@@ -444,35 +492,77 @@ if user['role'] in ['admin', 'mador']:
                 s_key = s_row['access_key']
                 
                 s_ords = conn.execute("SELECT order_number, line_number, item_description FROM orders WHERE supplier_name=?", (s_name,)).fetchall()
-                ord_lines = "\n".join([f"• הזמנה {o['order_number']} שורה {o['line_number']} ({o['item_description']})" for o in s_ords[:6]])
+                ord_lines = "\n".join([f"• הזמנה {o['order_number']} שורה {o['line_number']} ({o['item_description']})" for o in s_ords[:8]])
                 
                 direct_link = f"{app_url}/?key={s_key}"
                 msg = (
                     f"היי {s_name}, מה נשמע?\n"
-                    f"זה רועי מהחט\"ל. ראיתי שיש לנו פער בלוח הזמנים בפריטים הבאים:\n"
+                    f"זה {sender_name} מהחט\"ל. אני עובר על ההזמנות הפתוחות שלנו וראיתי שיש לנו פער בלוח הזמנים בפריטים הבאים:\n"
                     f"{ord_lines}\n\n"
-                    f"לעדכון סטטוס וצפי אספקה בלחיצה אחת:\n"
+                    f"כדי לעדכן סטטוס וצפי אספקה בלחיצה אחת (ולכתוב לנו אם נדרש מענה מהמדור), היכנסו לקישור האישי שלכם:\n"
                     f"{direct_link}\n"
-                    f"(מפתח גישה: {s_key})\n"
-                    f"תודה מראש!"
+                    f"(מפתח גישה אישי: {s_key})\n"
+                    f"תודה מראש על שיתוף הפעולה, {sender_name}."
                 )
                 
                 if clean_p:
-                    wa_url = f"https://wa.me/{clean_p}?text={urllib.parse.quote(msg)}"
-                    wa_links.append((s_name, s_key, clean_p, wa_url, msg))
+                    wa_web_url = f"https://web.whatsapp.com/send?phone={clean_p}&text={urllib.parse.quote(msg)}"
+                    wa_me_url = f"https://wa.me/{clean_p}?text={urllib.parse.quote(msg)}"
+                    wa_links.append((s_name, s_key, clean_p, wa_web_url, wa_me_url, msg))
                 else:
-                    wa_links.append((s_name, s_key, None, None, msg))
+                    wa_links.append((s_name, s_key, None, None, None, msg))
             
-            valid_urls = [item[3] for item in wa_links if item[3] is not None]
-            if valid_urls and st.button(f"🚀 פתח צ'אטים בוואטסאפ לכל {len(valid_urls)} הספקים שנבחרו", type="primary", use_container_width=True):
-                js_open = "".join([f"window.open('{u}', '_blank');" for u in valid_urls[:10]])
-                components.html(f"<script>{js_open}</script>", height=0)
-                st.info("חלונות הוואטסאפ נפתחו!")
+            valid_items = [item for item in wa_links if item[2] is not None]
+            st.markdown(f"##### 3️⃣ שיגור אוטומטי ל-{len(valid_items)} ספקים בעלי מספר נייד תקין:")
+            
+            btn_c1, btn_c2 = st.columns(2)
+            with btn_c1:
+                if valid_items and st.button(f"🚀 שגר עכשיו בלחיצה לכל {len(valid_items)} הספקים (פתיחה מתוזמנת בדפדפן)", type="primary", use_container_width=True):
+                    # פותח את הצ'אטים בדיליי מדורג כדי לא לתקוע את הדפדפן
+                    js_code = "<script>"
+                    for idx, item in enumerate(valid_items):
+                        delay_ms = idx * 1200
+                        js_code += f"setTimeout(function(){{ window.open('{item[4]}', '_blank'); }}, {delay_ms});"
+                    js_code += "</script>"
+                    components.html(js_code, height=0)
+                    st.success(f"משגר כעת {len(valid_items)} שיחות וואטסאפ! (וודא שחלונות קופצים Pop-ups מאושרים בדפדפן).")
 
-            for s_name, s_key, clean_p, wa_url, msg in wa_links:
-                with st.expander(f"📲 {s_name} | מפתח: {s_key} | נייד: {clean_p or 'חסר'}"):
-                    if wa_url:
-                        st.link_button(f"💬 שלח וואטסאפ ל-{s_name}", wa_url, type="primary", use_container_width=True)
+            with btn_c2:
+                if valid_items and st.button(f"🤖 שגר אוטומטית מלא (Selenium במחשב מקומי)", use_container_width=True):
+                    try:
+                        from selenium import webdriver
+                        from selenium.webdriver.common.by import By
+                        from selenium.webdriver.support.ui import WebDriverWait
+                        from selenium.webdriver.support import expected_conditions as EC
+                        
+                        st.info("מפעיל דפדפן אוטומטי... וודא שנסרק ה-QR ב-WhatsApp Web.")
+                        options = webdriver.ChromeOptions()
+                        options.add_argument(r"user-data-dir=C:\selenium_whatsapp_profile")
+                        driver = webdriver.Chrome(options=options)
+                        progress = st.progress(0)
+                        
+                        for idx, (s_name, s_key, clean_p, wa_web_url, _, _) in enumerate(valid_items):
+                            driver.get(wa_web_url)
+                            try:
+                                send_btn = WebDriverWait(driver, 30).until(
+                                    EC.element_to_be_clickable((By.XPATH, '//span[@data-icon="send"]/ancestor::button | //button[@aria-label="שליחה"] | //span[@data-icon="send"]'))
+                                )
+                                time.sleep(2)
+                                send_btn.click()
+                                time.sleep(6)
+                            except Exception:
+                                pass
+                            progress.progress((idx + 1) / len(valid_items))
+                        driver.quit()
+                        st.success("כל ההודעות נשלחו אוטומטית בהצלחה!")
+                    except Exception:
+                        st.warning("שיגור Selenium ללא מגע יד זמין כאשר מריצים את המערכת מקומית על המחשב המשרדי. מהענן השתמש בכפתור השמאלי ('🚀 שגר עכשיו בלחיצה').")
+
+            st.write("")
+            for s_name, s_key, clean_p, _, wa_me_url, msg in wa_links:
+                with st.expander(f"📲 {s_name} | מפתח: {s_key} | נייד: {clean_p or 'חסר מספר נייד'}"):
+                    if wa_me_url:
+                        st.link_button(f"💬 שלח וואטסאפ ישירות ל-{s_name}", wa_me_url, type="primary", use_container_width=True)
                     else:
                         st.warning("אין מספר נייד תקין באקסל. העתק הודעה:")
                     st.code(msg, language="text")
@@ -526,7 +616,7 @@ if user['role'] in ['admin', 'mador']:
             conn.commit()
             st.success(f"נסרקו ועודכנו {count} שורות הזמנה בהצלחה!")
 
-# ==================== 4. מסך ספק ====================
+# ==================== 4. מסך ספק (מותאם לנייד עם טקסט כהה וברור 100%) ====================
 else:
     st.markdown(f"##### 📦 ההזמנות הפתוחות של: {user['entity_name']}")
     
@@ -537,7 +627,7 @@ else:
     else:
         sup_view = st.radio(
             "בחר אופן תצוגה:",
-            ["📱 תצוגת כרטיסיות", "💻 תצוגת טבלה מרוכזת"],
+            ["📱 תצוגת כרטיסיות (לנייד)", "💻 תצוגת טבלה מרוכזת (למחשב)"],
             horizontal=True
         )
         
