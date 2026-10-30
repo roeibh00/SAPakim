@@ -1,4 +1,4 @@
-"""SAPakim - פורטל הזמנות ספקים (Streamlit + SQLite)
+"""SAPakim - פורטל הזמנות ספקים (Streamlit + Postgres/SQLite)
 
 מבנה הקובץ:
   1. קונפיגורציה וקבועים
@@ -9,6 +9,7 @@
   6. main()
 """
 import json
+import re
 import secrets
 import sqlite3
 import urllib.parse
@@ -152,22 +153,36 @@ CSS = """
     }
     [role="option"], [role="option"] * { min-height: 44px; }
 
-    /* לוח שנה: רקע לבן, כל הטקסט (ימים, חודש, ימות השבוע, חיצים) כהה, יום נבחר בכתום */
-    [data-baseweb="popover"]:has([data-baseweb="calendar"]),
-    [data-baseweb="popover"]:has([data-baseweb="calendar"]) > div,
-    [data-baseweb="calendar"] { background-color: #ffffff !important; color-scheme: light !important; }
-    [data-baseweb="calendar"] * {
-        background-color: transparent !important;
-        color: #0f172a !important; -webkit-text-fill-color: #0f172a !important; fill: #0f172a !important;
-        opacity: 1 !important; font-family: 'Rubik', sans-serif !important; font-size: 15px !important;
+    /* לוח שנה ושדה התאריך (Streamlit חדש): רקע לבן, טקסט כהה, יום נבחר בכתום */
+    [data-testid="stDateInputField"] {
+        background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color-scheme: light !important;
     }
-    [data-baseweb="calendar"] [role="gridcell"]:hover, [data-baseweb="calendar"] [role="button"]:hover {
-        background-color: #fef3c7 !important;
+    [data-testid="stDateInputField"] * {
+        color: #0f172a !important; -webkit-text-fill-color: #0f172a !important;
+        font-family: 'Rubik', sans-serif !important; font-size: 16px !important;
     }
-    [data-baseweb="calendar"] [aria-selected="true"] { background-color: #d97706 !important; }
-    [data-baseweb="calendar"] [aria-selected="true"] * {
-        background-color: transparent !important;
-        color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; fill: #ffffff !important;
+    [data-testid="stDateInputField"] [data-placeholder="true"] { color: #64748b !important; -webkit-text-fill-color: #64748b !important; }
+    [data-testid="stDateInputField"] [role="spinbutton"][data-focused="true"],
+    [data-testid="stDateInputField"] [role="spinbutton"]:focus {
+        background-color: #d97706 !important; color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; border-radius: 4px;
+    }
+
+    [data-testid="stDateInputCalendar"] {
+        background-color: #ffffff !important; color-scheme: light !important;
+        border: 1px solid #cbd5e1 !important; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18) !important;
+    }
+    [data-testid="stDateInputCalendar"] * {
+        color: #0f172a !important; -webkit-text-fill-color: #0f172a !important;
+        opacity: 1 !important; font-family: 'Rubik', sans-serif !important;
+    }
+    [data-testid="stDateInputCalendar"] [aria-disabled="true"],
+    [data-testid="stDateInputCalendar"] [data-outside-month="true"] {
+        color: #94a3b8 !important; -webkit-text-fill-color: #94a3b8 !important;
+    }
+    [data-testid="stDateInputCalendar"] [role="button"]:hover { background-color: #fef3c7 !important; }
+    [data-testid="stDateInputCalendar"] [data-selected="true"], [data-testid="stDateInputCalendar"] [aria-selected="true"] [role="button"],
+    [data-testid="stDateInputCalendar"] [data-selected="true"] * {
+        background-color: #d97706 !important; color: #ffffff !important; -webkit-text-fill-color: #ffffff !important;
     }
 
     /* ---------- כרטיסי הזמנה ---------- */
@@ -208,16 +223,68 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 
 # ==================== 3. מסד נתונים ====================
+def _read_database_url():
+    try:
+        return st.secrets.get("DATABASE_URL", "")
+    except Exception:  # אין קובץ secrets - עובדים מקומית עם SQLite
+        return ""
+
+
+DATABASE_URL = _read_database_url()
+USE_PG = bool(DATABASE_URL)  # יש DATABASE_URL ב-Secrets = מסד Postgres קבוע (למשל Supabase)
+PK_DEF = "SERIAL PRIMARY KEY" if USE_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+
+def _py(value):
+    """ממיר ערכי numpy/pandas לטיפוסי פייתון רגילים, כדי שיעברו תקין למסד."""
+    if isinstance(value, dict):
+        return {k: _py(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return tuple(_py(v) for v in value)
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        return value.item()
+    return value
+
+
+class Db:
+    """עוטף אחיד ל-SQLite (מקומי/זמני) ול-Postgres (קבוע): execute / commit / close."""
+
+    def __init__(self):
+        if USE_PG:
+            import psycopg2
+            import psycopg2.extras
+            self.raw = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor, connect_timeout=10)
+        else:
+            self.raw = sqlite3.connect(DB_PATH, check_same_thread=False)
+            self.raw.row_factory = sqlite3.Row
+
+    def execute(self, sql, params=()):
+        params = _py(params)
+        if USE_PG:
+            if isinstance(params, dict):
+                sql = re.sub(r":(\w+)", r"%(\1)s", sql)  # :name -> %(name)s
+            else:
+                sql = sql.replace("?", "%s")
+        cur = self.raw.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self.raw.commit()
+
+    def close(self):
+        self.raw.close()
+
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return Db()
 
 
 def query_df(conn, sql, params=()):
-    """מריץ SELECT ומחזיר DataFrame."""
+    """מריץ SELECT ומחזיר DataFrame (עובד זהה על SQLite ועל Postgres)."""
     cur = conn.execute(sql, params)
-    return pd.DataFrame([dict(r) for r in cur.fetchall()], columns=[d[0] for d in cur.description])
+    rows = cur.fetchall()
+    return pd.DataFrame([dict(r) for r in rows], columns=[d[0] for d in cur.description])
 
 
 @st.cache_resource
@@ -233,9 +300,9 @@ def init_db():
             phone TEXT DEFAULT '',
             UNIQUE(role, entity_name)
         )''')
-    conn.execute('''
+    conn.execute(f'''
         CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {PK_DEF},
             order_number TEXT NOT NULL,
             line_number TEXT NOT NULL,
             part_number TEXT DEFAULT '',
@@ -257,16 +324,16 @@ def init_db():
         )''')
     conn.commit()
 
-    # מיגרציות לקובץ SQLite ישן (נכשל בשקט אם העמודה כבר קיימת)
-    for sql in [
-        "ALTER TABLE orders ADD COLUMN contact_person TEXT DEFAULT ''",
-        "ALTER TABLE orders ADD COLUMN internal_status TEXT DEFAULT ''",
-        "ALTER TABLE access_keys ADD COLUMN contact_person TEXT DEFAULT ''",
-    ]:
-        try:
-            conn.execute(sql)
-        except sqlite3.OperationalError:
-            pass
+    if not USE_PG:  # מיגרציות רק לקובץ SQLite ישן (נכשל בשקט אם העמודה קיימת)
+        for sql in [
+            "ALTER TABLE orders ADD COLUMN contact_person TEXT DEFAULT ''",
+            "ALTER TABLE orders ADD COLUMN internal_status TEXT DEFAULT ''",
+            "ALTER TABLE access_keys ADD COLUMN contact_person TEXT DEFAULT ''",
+        ]:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass
 
     # מפתחות הצוות תמיד מסונכרנים עם הקוד (ספקים לא נוגעים)
     conn.execute("DELETE FROM access_keys WHERE role IN ('admin', 'mador')")
@@ -455,6 +522,9 @@ def render_top_bar(user):
 
 # ==================== 5ב. ממשק מנהל ומדורים ====================
 def render_staff(conn):
+    if not USE_PG:
+        st.warning("⚠️ המערכת עובדת עם מסד נתונים **זמני**: הנתונים יימחקו באתחול או בעדכון קוד. "
+                   "הגדירו DATABASE_URL ב-Secrets לחיבור למסד קבוע.")
     tab_orders, tab_wa, tab_upload = st.tabs(["📊 הזמנות ומענה", "💬 שיגור וואטסאפ אוטומטי", "📥 טעינת אקסל"])
     with tab_orders:
         render_orders_tab(conn)
@@ -1009,7 +1079,7 @@ def main():
         init_db()
         conn = get_db()
     except Exception as exc:
-        st.error("❌ לא ניתן לפתוח את מסד הנתונים.")
+        st.error("❌ אין חיבור למסד הנתונים. בדקו את DATABASE_URL ב-Secrets של האפליקציה.")
         st.code(str(exc))
         st.stop()
     try:
