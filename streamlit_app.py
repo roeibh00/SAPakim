@@ -152,14 +152,22 @@ CSS = """
     }
     [role="option"], [role="option"] * { min-height: 44px; }
 
-    /* לוח שנה: רקע בהיר, יום נבחר בכתום */
+    /* לוח שנה: רקע לבן, כל הטקסט (ימים, חודש, ימות השבוע, חיצים) כהה, יום נבחר בכתום */
+    [data-baseweb="popover"]:has([data-baseweb="calendar"]),
+    [data-baseweb="popover"]:has([data-baseweb="calendar"]) > div,
     [data-baseweb="calendar"] { background-color: #ffffff !important; color-scheme: light !important; }
-    [data-baseweb="calendar"] [aria-selected="true"], [data-baseweb="calendar"] [aria-selected="true"] * {
-        background-color: #d97706 !important; color: #ffffff !important;
+    [data-baseweb="calendar"] * {
+        background-color: transparent !important;
+        color: #0f172a !important; -webkit-text-fill-color: #0f172a !important; fill: #0f172a !important;
+        opacity: 1 !important; font-family: 'Rubik', sans-serif !important; font-size: 15px !important;
     }
-    [role="option"]:hover, [role="option"]:hover *,
-    [role="option"][aria-selected="true"], [role="option"][aria-selected="true"] * {
+    [data-baseweb="calendar"] [role="gridcell"]:hover, [data-baseweb="calendar"] [role="button"]:hover {
         background-color: #fef3c7 !important;
+    }
+    [data-baseweb="calendar"] [aria-selected="true"] { background-color: #d97706 !important; }
+    [data-baseweb="calendar"] [aria-selected="true"] * {
+        background-color: transparent !important;
+        color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; fill: #ffffff !important;
     }
 
     /* ---------- כרטיסי הזמנה ---------- */
@@ -206,7 +214,15 @@ def get_db():
     return conn
 
 
+def query_df(conn, sql, params=()):
+    """מריץ SELECT ומחזיר DataFrame."""
+    cur = conn.execute(sql, params)
+    return pd.DataFrame([dict(r) for r in cur.fetchall()], columns=[d[0] for d in cur.description])
+
+
+@st.cache_resource
 def init_db():
+    """יוצר טבלאות ומפתחות צוות. רץ פעם אחת לכל הפעלה של השרת."""
     conn = get_db()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS access_keys (
@@ -239,7 +255,9 @@ def init_db():
             last_updated TEXT DEFAULT '',
             UNIQUE(order_number, line_number)
         )''')
-    # מיגרציות לבסיסי נתונים ישנים (נכשל בשקט אם העמודה כבר קיימת)
+    conn.commit()
+
+    # מיגרציות לקובץ SQLite ישן (נכשל בשקט אם העמודה כבר קיימת)
     for sql in [
         "ALTER TABLE orders ADD COLUMN contact_person TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN internal_status TEXT DEFAULT ''",
@@ -250,11 +268,13 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
-    conn.execute("DELETE FROM access_keys WHERE access_key IN ('ADMIN-ROEY', 'MAD-NAMER', 'MAD-MANHAR')")
+    # מפתחות הצוות תמיד מסונכרנים עם הקוד (ספקים לא נוגעים)
+    conn.execute("DELETE FROM access_keys WHERE role IN ('admin', 'mador')")
     for key, role, name in STAFF_KEYS:
-        conn.execute("INSERT OR REPLACE INTO access_keys (access_key, role, entity_name) VALUES (?, ?, ?)", (key, role, name))
+        conn.execute("INSERT INTO access_keys (access_key, role, entity_name) VALUES (?, ?, ?)", (key, role, name))
     conn.commit()
     conn.close()
+    return True
 
 
 def get_or_create_key(conn, entity_name, contact_person="", phone=""):
@@ -285,12 +305,15 @@ def get_or_create_key(conn, entity_name, contact_person="", phone=""):
 def save_supplier_updates(conn, supplier_name, updates):
     """שומר עדכוני ספק. updates = [(order_id, status, expected_date, note), ...]"""
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    due_by_id = {int(r["id"]): r["due_date"] for r in
+                 conn.execute("SELECT id, due_date FROM orders WHERE supplier_name=?", (supplier_name,)).fetchall()}
     for order_id, status, expected, note in updates:
+        flag = needs_attention(status, note, expected, due_by_id.get(int(order_id), ""))
         conn.execute(
             """UPDATE orders
                SET supplier_status=?, expected_date=?, supplier_note=?, needs_attention=?, last_updated=?
                WHERE id=? AND supplier_name=?""",
-            (status, expected, note, int(needs_attention(status, note)), now, order_id, supplier_name),
+            (status, expected, note, int(flag), now, int(order_id), supplier_name),
         )
     conn.commit()
 
@@ -351,8 +374,26 @@ def encode_eta(picked_date, no_eta):
     return picked_date.strftime("%d/%m/%Y")
 
 
-def needs_attention(status, note):
-    return bool(str(note).strip()) or any(w in str(status) for w in ALERT_WORDS)
+def attention_reason(status, note, expected, due):
+    """סיבות לסימון ⚠️ (מחרוזת ריקה = אין צורך בטיפול)."""
+    status = str(status or "").strip()
+    reasons = []
+    if str(note or "").strip():
+        reasons.append("יש הערת ספק")
+    if any(w in status for w in ALERT_WORDS):
+        reasons.append(f"סטטוס: {status}")
+    if status != DONE_STATUS:
+        if clean_str(expected) == NO_ETA:
+            reasons.append("אין צפי אספקה")
+        else:
+            eta, due_date = parse_date(expected), parse_date(due)
+            if eta and due_date and eta > due_date:
+                reasons.append(f"צפי באיחור של {(eta - due_date).days} ימים מתאריך האספקה")
+    return " | ".join(reasons)
+
+
+def needs_attention(status, note, expected, due):
+    return bool(attention_reason(status, note, expected, due))
 
 
 def not_done(series):
@@ -360,7 +401,7 @@ def not_done(series):
 
 
 # ==================== 5א. מסך כניסה ====================
-def render_login():
+def render_login(conn):
     _, center, _ = st.columns([0.8, 2, 0.8])
     with center:
         st.markdown("""
@@ -379,7 +420,7 @@ def render_login():
 
             key_input = st.text_input("מפתח גישה סודי:", type="password", placeholder="••••••••••••").strip().upper()
             if st.button("התחבר למערכת 🔒", type="primary", use_container_width=True):
-                if not login_with_key(key_input):
+                if not login_with_key(conn, key_input):
                     st.session_state.failed_attempts += 1
                     st.error(f"מפתח גישה שגוי או שאינו מורשה (ניסיון {st.session_state.failed_attempts}/{MAX_LOGIN_ATTEMPTS}).")
                 else:
@@ -387,10 +428,8 @@ def render_login():
         st.markdown('<div class="watermark">Powered by BEN HUR</div>', unsafe_allow_html=True)
 
 
-def login_with_key(key):
-    conn = get_db()
+def login_with_key(conn, key):
     row = conn.execute("SELECT * FROM access_keys WHERE UPPER(access_key)=?", (key,)).fetchone()
-    conn.close()
     if row:
         st.session_state.user = dict(row)
         st.session_state.failed_attempts = 0
@@ -426,7 +465,7 @@ def render_staff(conn):
 
 
 def render_orders_tab(conn):
-    df = pd.read_sql_query("SELECT * FROM orders ORDER BY needs_attention DESC, supplier_name, order_number", conn)
+    df = query_df(conn, "SELECT * FROM orders ORDER BY needs_attention DESC, supplier_name, order_number")
     if df.empty:
         st.info("אין עדיין הזמנות במערכת. עבור ללשונית 'טעינת אקסל' כדי להעלות קובץ.")
         return
@@ -471,6 +510,10 @@ def render_staff_cards(conn, view):
                 <strong>פריט:</strong> {r['item_description']} | <strong>מק"ט:</strong> {r['part_number']} | <strong>שורה:</strong> {r['line_number']}<br>
                 <strong>👤 איש קשר:</strong> {r['contact_person'] or '-'} | <strong>📞 טלפון:</strong> {r['supplier_phone'] or 'חסר'}
             </div>""", unsafe_allow_html=True)
+            if r["needs_attention"] == 1:
+                reason = attention_reason(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"])
+                if reason:
+                    st.warning(f"⚠️ סיבת הסימון: {reason}")
             st.markdown(f"🔒 **סטטוס עדכני:** `{r['supplier_status']}` | **צפי ספק:** `{r['expected_date'] or 'לא הוזן'}`")
             st.markdown(f"🔒 **תגובת / הערת ספק:** {r['supplier_note'] or 'אין הערות'}")
 
@@ -485,7 +528,12 @@ def render_staff_cards(conn, view):
 
 def render_staff_table(conn, view):
     st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. המדור יכול לעדכן איש קשר, טלפון, מק"ט ומענה מדור.')
-    cols = ["id", "supplier_name", "contact_person", "supplier_phone", "order_number", "line_number",
+    view = view.copy()
+    view["attention"] = [
+        attention_reason(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"]) if r["needs_attention"] == 1 else ""
+        for _, r in view.iterrows()
+    ]
+    cols = ["id", "attention", "supplier_name", "contact_person", "supplier_phone", "order_number", "line_number",
             "part_number", "item_description", "due_date", "supplier_status", "expected_date",
             "supplier_note", "mador_response"]
     T = st.column_config.TextColumn
@@ -493,6 +541,7 @@ def render_staff_table(conn, view):
         view[cols],
         column_config={
             "id": None,
+            "attention": T("⚠️ סיבת סימון", disabled=True),
             "supplier_name": T("חברה", disabled=True),
             "contact_person": T("👤 איש קשר"),
             "supplier_phone": T("📞 מספר טלפון"),
@@ -549,11 +598,11 @@ SUPPLIERS_SQL = '''
         COALESCE(NULLIF(MAX(o.supplier_phone), ''), NULLIF(u.phone, ''), '') AS phone,
         u.access_key,
         COUNT(o.id) AS total_orders,
-        SUM(CASE WHEN TRIM(COALESCE(o.supplier_status, '')) != 'סופק' THEN 1 ELSE 0 END) AS open_or_delayed_orders
+        COALESCE(CAST(SUM(CASE WHEN TRIM(COALESCE(o.supplier_status, '')) != 'סופק' THEN 1 ELSE 0 END) AS INTEGER), 0) AS open_or_delayed_orders
     FROM access_keys u
     LEFT JOIN orders o ON o.supplier_name = u.entity_name
     WHERE u.role = 'supplier'
-    GROUP BY u.entity_name
+    GROUP BY u.entity_name, u.access_key, u.contact_person, u.phone
     ORDER BY open_or_delayed_orders DESC, u.entity_name
 '''
 
@@ -650,7 +699,7 @@ def render_launcher(items):
 
 def render_whatsapp_tab(conn):
     st.markdown("##### 💬 מערך שיגור הודעות וואטסאפ אוטומטי לספקים ואנשי קשר")
-    df_sups = pd.read_sql_query(SUPPLIERS_SQL, conn)
+    df_sups = query_df(conn, SUPPLIERS_SQL)
     df_sups["wa_ready"] = df_sups["phone"].apply(lambda p: "✅ תקין" if format_wa_phone(p) else "❌ חסר נייד")
 
     with st.container(border=True):
@@ -670,8 +719,10 @@ def render_whatsapp_tab(conn):
         else:
             pool = df_sups.copy()
 
-        pool["label"] = pool.apply(
-            lambda r: f"{r['supplier_name']} | 👤 {r['contact_person'] or 'ללא איש קשר'} | 📞 {r['phone'] or 'ללא טלפון'}", axis=1)
+        pool["label"] = [
+            f"{r['supplier_name']} | 👤 {r['contact_person'] or 'ללא איש קשר'} | 📞 {r['phone'] or 'ללא טלפון'}"
+            for _, r in pool.iterrows()
+        ]
 
         select_mode = st.radio(
             "2️⃣ בחר אופן סימון ספקים:",
@@ -793,6 +844,14 @@ def import_orders(conn, df):
     conn.execute("""UPDATE orders SET supplier_status = COALESCE(NULLIF(internal_status, ''), 'טרם עודכן')
                     WHERE supplier_status = '' OR supplier_status IS NULL""")
 
+    # סימון ⚠️ לשורות שטרם נענו ע"י מדור ויש בהן הערה / "אין צפי" / צפי באיחור
+    pending = conn.execute(
+        "SELECT id, supplier_status, supplier_note, expected_date, due_date FROM orders "
+        "WHERE COALESCE(mador_response, '') = '' AND needs_attention = 0").fetchall()
+    for r in pending:
+        if needs_attention(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"]):
+            conn.execute("UPDATE orders SET needs_attention=1 WHERE id=?", (r["id"],))
+
     # השלמה רוחבית: איש קשר / טלפון שנמצאו אצל ספק יועתקו לכל שורותיו
     for order_col, key_col in (("contact_person", "contact_person"), ("supplier_phone", "phone")):
         conn.execute(f"""
@@ -807,9 +866,9 @@ def import_orders(conn, df):
 # ==================== 5ג. מסך ספק ====================
 def render_supplier(conn, user):
     st.markdown(f"##### 📦 ההזמנות הפתוחות של: {user['entity_name']}")
-    df = pd.read_sql_query(
-        "SELECT * FROM orders WHERE supplier_name=? ORDER BY order_number, CAST(line_number AS INTEGER)",
-        conn, params=(user["entity_name"],))
+    df = query_df(conn, "SELECT * FROM orders WHERE supplier_name=?", (user["entity_name"],))
+    df["_line"] = pd.to_numeric(df["line_number"], errors="coerce")
+    df = df.sort_values(["order_number", "_line"]).drop(columns="_line")
 
     if df.empty:
         st.warning("לא נמצאו הזמנות פתוחות המשויכות אליכם כרגע.")
@@ -922,8 +981,7 @@ def render_done_screen(df):
 
 
 # ==================== 6. main ====================
-def main():
-    init_db()
+def run_app(conn):
     st.session_state.setdefault("user", None)
     st.session_state.setdefault("failed_attempts", 0)
     st.session_state.setdefault("submitted", False)
@@ -931,20 +989,33 @@ def main():
     # כניסה אוטומטית דרך קישור אישי (?key=...)
     url_key = st.query_params.get("key", "").strip().upper()
     if url_key and not st.session_state.user:
-        login_with_key(url_key)
+        login_with_key(conn, url_key)
 
     if not st.session_state.user:
-        render_login()
+        render_login(conn)
         st.stop()
 
     user = st.session_state.user
     render_top_bar(user)
-    conn = get_db()
     if user["role"] in ("admin", "mador"):
         render_staff(conn)
     else:
         render_supplier(conn, user)
     st.markdown('<div class="watermark">Powered by BEN HUR</div>', unsafe_allow_html=True)
+
+
+def main():
+    try:
+        init_db()
+        conn = get_db()
+    except Exception as exc:
+        st.error("❌ לא ניתן לפתוח את מסד הנתונים.")
+        st.code(str(exc))
+        st.stop()
+    try:
+        run_app(conn)
+    finally:
+        conn.close()
 
 
 main()
