@@ -64,12 +64,13 @@ EXCEL_ALIASES = {
     "status": ["סטטוס עדכני"],
     "note": ["תגובת ספק"],
     "updated": ["תאריך_עדכון_אחרון", "תאריך עדכון"],
+    "mador": ["מענה מדור"],
 }
 
 # עמודות שלא נדרסות בטעינת אקסל אם הערך החדש ריק
 KEEP_IF_EMPTY = [
     "part_number", "item_description", "contact_person", "supplier_phone", "due_date",
-    "internal_status", "supplier_status", "expected_date", "supplier_note",
+    "internal_status", "supplier_status", "expected_date", "supplier_note", "mador_response",
 ]
 
 # ייצוא לאקסל: כותרת בעברית -> עמודה בבסיס הנתונים
@@ -134,19 +135,24 @@ CSS = """
         color: #0f172a !important; font-weight: 600 !important; font-size: 0.9rem !important;
     }
 
-    /* ---------- תיקון: רשימת הבחירה הנפתחת (בנייד הייתה כהה עם טקסט כהה) ---------- */
-    [data-baseweb="popover"], [data-baseweb="popover"] > div,
-    [data-baseweb="menu"], ul[role="listbox"] {
-        background-color: #ffffff !important; color-scheme: light !important;
+    /* ---------- תיקון: רשימת הבחירה הנפתחת בנייד (רקע לבן + טקסט כהה בכל הרכיבים) ---------- */
+    [data-baseweb="popover"], [data-baseweb="popover"] *,
+    [data-baseweb="menu"], [data-baseweb="menu"] *,
+    [role="listbox"], [role="listbox"] *,
+    [data-testid="stSelectboxVirtualDropdown"], [data-testid="stSelectboxVirtualDropdown"] * {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+        -webkit-text-fill-color: #0f172a !important;
+        color-scheme: light !important;
+        opacity: 1 !important;
+        font-family: 'Rubik', sans-serif !important;
+        font-size: 16px !important;
     }
-    ul[role="listbox"] li, li[role="option"] {
-        background-color: #ffffff !important; min-height: 46px;
-        font-family: 'Rubik', sans-serif !important; font-size: 16px !important;
+    [role="option"], [role="option"] * { min-height: 44px; }
+    [role="option"]:hover, [role="option"]:hover *,
+    [role="option"][aria-selected="true"], [role="option"][aria-selected="true"] * {
+        background-color: #fef3c7 !important;
     }
-    ul[role="listbox"] li, ul[role="listbox"] li *, li[role="option"], li[role="option"] * {
-        color: #0f172a !important; -webkit-text-fill-color: #0f172a !important; opacity: 1 !important;
-    }
-    li[role="option"]:hover, li[role="option"][aria-selected="true"] { background-color: #fef3c7 !important; }
 
     /* ---------- כרטיסי הזמנה ---------- */
     .order-card-header {
@@ -739,9 +745,10 @@ def import_orders(conn, df):
             "supplier_phone": phone,
             "due_date": get(r, "due").split(" ")[0],
             "internal_status": internal,
-            "supplier_status": get(r, "status") or internal or "טרם עודכן",
+            "supplier_status": get(r, "status"),  # ריק = לא נדרס אם כבר יש תשובת ספק
             "expected_date": get(r, "expected").split(" ")[0],
             "supplier_note": get(r, "note"),
+            "mador_response": get(r, "mador"),
             "last_updated": get(r, "updated"),
         }
         names = ", ".join(data)
@@ -753,6 +760,10 @@ def import_orders(conn, df):
             data,
         )
         rows += 1
+
+    # שורות חדשות בלי סטטוס ספק: ברירת מחדל = סטטוס פנימי, ואם אין - "טרם עודכן"
+    conn.execute("""UPDATE orders SET supplier_status = COALESCE(NULLIF(internal_status, ''), 'טרם עודכן')
+                    WHERE supplier_status = '' OR supplier_status IS NULL""")
 
     # השלמה רוחבית: איש קשר / טלפון שנמצאו אצל ספק יועתקו לכל שורותיו
     for order_col, key_col in (("contact_person", "contact_person"), ("supplier_phone", "phone")):
