@@ -31,6 +31,8 @@ DB_PATH = "sapakim_cloud.db"
 APP_URL = "https://sapakim-kukmcxaux8yf9tfjrygif9.streamlit.app"
 MAX_LOGIN_ATTEMPTS = 5
 DONE_STATUS = "סופק"
+NO_ETA = "אין צפי"
+DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y")
 
 STATUS_OPTIONS = [
     "טרם עודכן", "תקין - בייצור", "בטיפול - שבוע הבא", "בטיפול מיידי",
@@ -136,7 +138,7 @@ CSS = """
     }
 
     /* ---------- תיקון: רשימת הבחירה הנפתחת בנייד (רקע לבן + טקסט כהה בכל הרכיבים) ---------- */
-    [data-baseweb="popover"], [data-baseweb="popover"] *,
+    [data-baseweb="popover"]:has([role="listbox"]), [data-baseweb="popover"]:has([role="listbox"]) *,
     [data-baseweb="menu"], [data-baseweb="menu"] *,
     [role="listbox"], [role="listbox"] *,
     [data-testid="stSelectboxVirtualDropdown"], [data-testid="stSelectboxVirtualDropdown"] * {
@@ -149,6 +151,12 @@ CSS = """
         font-size: 16px !important;
     }
     [role="option"], [role="option"] * { min-height: 44px; }
+
+    /* לוח שנה: רקע בהיר, יום נבחר בכתום */
+    [data-baseweb="calendar"] { background-color: #ffffff !important; color-scheme: light !important; }
+    [data-baseweb="calendar"] [aria-selected="true"], [data-baseweb="calendar"] [aria-selected="true"] * {
+        background-color: #d97706 !important; color: #ffffff !important;
+    }
     [role="option"]:hover, [role="option"]:hover *,
     [role="option"][aria-selected="true"], [role="option"][aria-selected="true"] * {
         background-color: #fef3c7 !important;
@@ -321,6 +329,26 @@ def format_wa_phone(raw):
     """מחזיר מספר בפורמט בינלאומי (972...) רק לנייד ישראלי תקין, אחרת None."""
     disp = clean_display_phone(raw)
     return "972" + disp[1:] if disp.startswith("05") and len(disp) == 10 else None
+
+
+def parse_date(value):
+    """ממיר טקסט תאריך (בכמה פורמטים נפוצים) ל-date, או None אם אין / לא מזוהה."""
+    text = clean_str(value).split(" ")[0]
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def encode_eta(picked_date, no_eta):
+    """מקודד את בחירת הספק לטקסט שנשמר: 'אין צפי' / DD/MM/YYYY / ריק."""
+    if no_eta:
+        return NO_ETA
+    if picked_date is None or pd.isna(picked_date):
+        return ""
+    return picked_date.strftime("%d/%m/%Y")
 
 
 def needs_attention(status, note):
@@ -826,9 +854,13 @@ def render_supplier_cards(df):
                     st.info(f"💬 **מענה מדור חט\"ל (נעול):** {row['mador_response']}")
 
                 current = row["supplier_status"] if row["supplier_status"] in STATUS_OPTIONS else STATUS_OPTIONS[0]
-                c1, c2 = st.columns(2)
-                status = c1.selectbox("✍️ סטטוס עדכני:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current), key=f"st_{row['id']}")
-                expected = c2.text_input("✍️ צפי ספק (תאריך):", value=row["expected_date"], placeholder="למשל: 15/09/2026", key=f"dt_{row['id']}")
+                status = st.selectbox("✍️ סטטוס עדכני:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current), key=f"st_{row['id']}")
+                c1, c2 = st.columns([3, 2])
+                eta_date = c1.date_input(
+                    "📅 צפי אספקה (בחרו מהלוח):", value=parse_date(row["expected_date"]),
+                    format="DD/MM/YYYY", key=f"eta_{row['id']}")
+                no_eta = c2.checkbox("❓ אין צפי עדיין", value=clean_str(row["expected_date"]) == NO_ETA, key=f"noeta_{row['id']}")
+                expected = encode_eta(eta_date, no_eta)
                 note = st.text_input("✍️ תגובת ספק / בקשה למדור:", value=row["supplier_note"], placeholder="פרט סיבת עיכוב או בקשה...", key=f"nt_{row['id']}")
                 updates.append((row["id"], status, expected, note))
 
@@ -840,10 +872,12 @@ def render_supplier_table(df):
     st.caption("🔒 פרטי ההזמנה ותשובות המדור נעולים לשינוי.")
     df = df.copy()
     df["supplier_status"] = df["supplier_status"].apply(lambda x: x if x in STATUS_OPTIONS else STATUS_OPTIONS[0])
+    df["eta_date"] = df["expected_date"].apply(parse_date)
+    df["no_eta"] = df["expected_date"].apply(lambda x: clean_str(x) == NO_ETA)
     T = st.column_config.TextColumn
     edited = st.data_editor(
         df[["id", "order_number", "line_number", "part_number", "item_description", "due_date",
-            "supplier_status", "expected_date", "supplier_note", "mador_response"]],
+            "supplier_status", "eta_date", "no_eta", "supplier_note", "mador_response"]],
         column_config={
             "id": None,
             "order_number": T("🔒 מס' הזמנה", disabled=True),
@@ -852,14 +886,16 @@ def render_supplier_table(df):
             "item_description": T("🔒 שם פריט", disabled=True),
             "due_date": T("🔒 תאריך אספקה", disabled=True),
             "supplier_status": st.column_config.SelectboxColumn("✍️ סטטוס עדכני", options=STATUS_OPTIONS, required=True),
-            "expected_date": T("✍️ צפי ספק"),
+            "eta_date": st.column_config.DateColumn("📅 צפי אספקה", format="DD/MM/YYYY"),
+            "no_eta": st.column_config.CheckboxColumn("❓ אין צפי"),
             "supplier_note": T("✍️ תגובת ספק"),
             "mador_response": T('🔒 מענה מדור חט"ל', disabled=True),
         },
         use_container_width=True, hide_index=True,
     )
     if st.button('✅ שמור ושלח עדכונים לחט"ל', type="primary", use_container_width=True):
-        return [(r["id"], r["supplier_status"], r["expected_date"], r["supplier_note"]) for _, r in edited.iterrows()]
+        return [(r["id"], r["supplier_status"], encode_eta(r["eta_date"], r["no_eta"]), r["supplier_note"])
+                for _, r in edited.iterrows()]
     return None
 
 
