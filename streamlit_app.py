@@ -1,11 +1,11 @@
-"""SAPakim - פורטל הזמנות ספקים (Streamlit + Postgres/SQLite)
+"""SAPakim - פורטל הזמנות ספקים (Streamlit + Neon PostgreSQL / SQLite)
 
 מבנה הקובץ:
   1. קונפיגורציה וקבועים
   2. עיצוב (CSS)
-  3. מסד נתונים
+  3. מסד נתונים (Neon PostgreSQL קבוע / SQLite מקומי)
   4. פונקציות עזר
-  5. מסכים: כניסה / מנהל ומדורים / ספק
+  5. מסכים: כניסה / מנהל ומדורים (כולל מחיקת הזמנות למנהל) / ספק
   6. main()
 """
 import json
@@ -40,10 +40,8 @@ STATUS_OPTIONS = [
     "מוכן לאספקה", 'ממתין לבק"מ', "חסר שרטוט / דרוש מענה מדור",
     "מעוכב - חוסר חומר גלם", "עיכוב / בפיגור", DONE_STATUS,
 ]
-# סטטוס שמכיל אחת מהמילים האלה (או הערת ספק) מסמן "דורש תשומת לב מהמדור"
 ALERT_WORDS = ("שרטוט", "עיכוב", "מעוכב")
 
-# מפתחות צוות. מומלץ להעביר ל-st.secrets (ראה הערה בסוף ההודעה) ולא להשאיר בקוד ציבורי.
 STAFF_KEYS = [
     ("BH-ADMIN-9920", "admin", "רועי - מנהל מערכת ראשי"),
     ("NAMER-7741", "mador", 'מדור נמ"ר'),
@@ -51,7 +49,6 @@ STAFF_KEYS = [
     ("MANHAR-3319", "mador", 'מנה"ר רכש'),
 ]
 
-# שמות אפשריים לכל עמודה בקובץ האקסל (הראשון שנמצא - נבחר)
 EXCEL_ALIASES = {
     "order": ["מספר הזמנה", "הזמנה"],
     "line": ["שורה", "מספר שורה"],
@@ -70,13 +67,11 @@ EXCEL_ALIASES = {
     "mador": ["מענה מדור"],
 }
 
-# עמודות שלא נדרסות בטעינת אקסל אם הערך החדש ריק
 KEEP_IF_EMPTY = [
     "part_number", "item_description", "contact_person", "supplier_phone", "due_date",
     "internal_status", "supplier_status", "expected_date", "supplier_note", "mador_response",
 ]
 
-# ייצוא לאקסל: כותרת בעברית -> עמודה בבסיס הנתונים
 EXPORT_MAP = {
     "מספר הזמנה": "order_number", "שורה": "line_number", "שם פריט": "item_description",
     'מק"ט': "part_number", "תאריך אספקה": "due_date", "חברה": "supplier_name",
@@ -110,7 +105,6 @@ CSS = """
     }
     p, span, label, div, h1, h2, h3, h4, h5, h6, li, th, td { color: #0f172a; }
 
-    /* ---------- כותרת ---------- */
     .header-box {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 65%, #78350f 100%);
         padding: 1.3rem 1.8rem; border-radius: 16px; border-bottom: 4px solid #f59e0b;
@@ -119,7 +113,6 @@ CSS = """
     .header-title { font-size: 1.45rem !important; font-weight: 700 !important; color: #fff !important; margin: 0 !important; }
     .header-sub { font-size: 0.88rem !important; color: #fcd34d !important; margin-top: 0.3rem !important; font-weight: 500; }
 
-    /* ---------- מדדים ---------- */
     div[data-testid="metric-container"] {
         background: #fff !important; padding: 0.9rem 1.1rem !important; border-radius: 14px !important;
         border: 1px solid #e2e8f0 !important; border-right: 5px solid #d97706 !important;
@@ -128,7 +121,6 @@ CSS = """
     div[data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 700 !important; direction: ltr; text-align: right; }
     div[data-testid="stMetricLabel"] p { font-size: 0.85rem !important; font-weight: 600 !important; color: #475569 !important; }
 
-    /* ---------- שדות קלט ---------- */
     input, textarea, select, [data-baseweb="select"] > div, [data-baseweb="input"] input {
         background-color: #fff !important; color: #0f172a !important;
         -webkit-text-fill-color: #0f172a !important; border-color: #cbd5e1 !important; font-weight: 500 !important;
@@ -138,7 +130,6 @@ CSS = """
         color: #0f172a !important; font-weight: 600 !important; font-size: 0.9rem !important;
     }
 
-    /* ---------- תיקון: רשימת הבחירה הנפתחת בנייד (רקע לבן + טקסט כהה בכל הרכיבים) ---------- */
     [data-baseweb="popover"]:has([role="listbox"]), [data-baseweb="popover"]:has([role="listbox"]) *,
     [data-baseweb="menu"], [data-baseweb="menu"] *,
     [role="listbox"], [role="listbox"] *,
@@ -153,7 +144,6 @@ CSS = """
     }
     [role="option"], [role="option"] * { min-height: 44px; }
 
-    /* לוח שנה ושדה התאריך (Streamlit חדש): רקע לבן, טקסט כהה, יום נבחר בכתום */
     [data-testid="stDateInputField"] {
         background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color-scheme: light !important;
     }
@@ -185,7 +175,6 @@ CSS = """
         background-color: #d97706 !important; color: #ffffff !important; -webkit-text-fill-color: #ffffff !important;
     }
 
-    /* ---------- כרטיסי הזמנה ---------- */
     .order-card-header {
         background: linear-gradient(90deg, #fef3c7 0%, #fffbeb 100%); padding: 0.75rem 1rem;
         border-radius: 10px; border-right: 5px solid #d97706; margin-bottom: 0.7rem; font-size: 0.92rem;
@@ -196,7 +185,6 @@ CSS = """
         font-size: 0.82rem; font-weight: 600; display: inline-block; margin-left: 0.4rem; margin-bottom: 0.4rem;
     }
 
-    /* ---------- כפתורים (כולל כפתור שליחה בתוך form - היה אדום) ---------- */
     button[kind^="primary"], button[data-testid^="stBaseButton-primary"] {
         background: linear-gradient(135deg, #d97706 0%, #b45309 100%) !important;
         border: none !important; font-weight: 600 !important; border-radius: 10px !important;
@@ -222,21 +210,23 @@ CSS = """
 st.markdown(CSS, unsafe_allow_html=True)
 
 
-# ==================== 3. מסד נתונים ====================
+# ==================== 3. מסד נתונים (Neon PostgreSQL / SQLite) ====================
 def _read_database_url():
     try:
-        return st.secrets.get("DATABASE_URL", "")
-    except Exception:  # אין קובץ secrets - עובדים מקומית עם SQLite
+        url = str(st.secrets.get("DATABASE_URL", "")).strip()
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        return url
+    except Exception:
         return ""
 
 
 DATABASE_URL = _read_database_url()
-USE_PG = bool(DATABASE_URL)  # יש DATABASE_URL ב-Secrets = מסד Postgres קבוע (למשל Supabase)
+USE_PG = bool(DATABASE_URL)
 PK_DEF = "SERIAL PRIMARY KEY" if USE_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
 
 def _py(value):
-    """ממיר ערכי numpy/pandas לטיפוסי פייתון רגילים, כדי שיעברו תקין למסד."""
     if isinstance(value, dict):
         return {k: _py(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -247,13 +237,13 @@ def _py(value):
 
 
 class Db:
-    """עוטף אחיד ל-SQLite (מקומי/זמני) ול-Postgres (קבוע): execute / commit / close."""
+    """עוטף אחיד ל-SQLite ול-Neon Postgres."""
 
     def __init__(self):
         if USE_PG:
             import psycopg2
             import psycopg2.extras
-            self.raw = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor, connect_timeout=10)
+            self.raw = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor, connect_timeout=15)
         else:
             self.raw = sqlite3.connect(DB_PATH, check_same_thread=False)
             self.raw.row_factory = sqlite3.Row
@@ -262,7 +252,7 @@ class Db:
         params = _py(params)
         if USE_PG:
             if isinstance(params, dict):
-                sql = re.sub(r":(\w+)", r"%(\1)s", sql)  # :name -> %(name)s
+                sql = re.sub(r":(\w+)", r"%(\1)s", sql)
             else:
                 sql = sql.replace("?", "%s")
         cur = self.raw.cursor()
@@ -281,7 +271,6 @@ def get_db():
 
 
 def query_df(conn, sql, params=()):
-    """מריץ SELECT ומחזיר DataFrame (עובד זהה על SQLite ועל Postgres)."""
     cur = conn.execute(sql, params)
     rows = cur.fetchall()
     return pd.DataFrame([dict(r) for r in rows], columns=[d[0] for d in cur.description])
@@ -289,7 +278,6 @@ def query_df(conn, sql, params=()):
 
 @st.cache_resource
 def init_db():
-    """יוצר טבלאות ומפתחות צוות. רץ פעם אחת לכל הפעלה של השרת."""
     conn = get_db()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS access_keys (
@@ -324,7 +312,7 @@ def init_db():
         )''')
     conn.commit()
 
-    if not USE_PG:  # מיגרציות רק לקובץ SQLite ישן (נכשל בשקט אם העמודה קיימת)
+    if not USE_PG:
         for sql in [
             "ALTER TABLE orders ADD COLUMN contact_person TEXT DEFAULT ''",
             "ALTER TABLE orders ADD COLUMN internal_status TEXT DEFAULT ''",
@@ -335,7 +323,6 @@ def init_db():
             except sqlite3.OperationalError:
                 pass
 
-    # מפתחות הצוות תמיד מסונכרנים עם הקוד (ספקים לא נוגעים)
     conn.execute("DELETE FROM access_keys WHERE role IN ('admin', 'mador')")
     for key, role, name in STAFF_KEYS:
         conn.execute("INSERT INTO access_keys (access_key, role, entity_name) VALUES (?, ?, ?)", (key, role, name))
@@ -345,7 +332,6 @@ def init_db():
 
 
 def get_or_create_key(conn, entity_name, contact_person="", phone=""):
-    """מחזיר מפתח גישה לספק (יוצר אם אין), ומעדכן איש קשר וטלפון אם התקבלו חדשים."""
     entity_name = clean_str(entity_name) or "ספק כללי"
     phone = clean_display_phone(phone)
     contact_person = clean_str(contact_person)
@@ -370,7 +356,6 @@ def get_or_create_key(conn, entity_name, contact_person="", phone=""):
 
 
 def save_supplier_updates(conn, supplier_name, updates):
-    """שומר עדכוני ספק. updates = [(order_id, status, expected_date, note), ...]"""
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
     due_by_id = {int(r["id"]): r["due_date"] for r in
                  conn.execute("SELECT id, due_date FROM orders WHERE supplier_name=?", (supplier_name,)).fetchall()}
@@ -385,9 +370,15 @@ def save_supplier_updates(conn, supplier_name, updates):
     conn.commit()
 
 
+def delete_orders_by_ids(conn, order_ids):
+    """מוחק שורות הזמנה לפי רשימת מזהים (מורשה למנהל מערכת בלבד)."""
+    for oid in order_ids:
+        conn.execute("DELETE FROM orders WHERE id=?", (int(oid),))
+    conn.commit()
+
+
 # ==================== 4. פונקציות עזר ====================
 def clean_str(val):
-    """ניקוי בטוח של ערך מאקסל (NaN / None / רווחים)."""
     if val is None or pd.isna(val):
         return ""
     s = str(val).strip()
@@ -395,7 +386,6 @@ def clean_str(val):
 
 
 def find_col(columns, candidates):
-    """מאתר עמודה באקסל גם אם שמה שונה מעט (רווחים / תוספות)."""
     for cand in candidates:
         for col in columns:
             if cand == str(col).strip() or cand in str(col).strip():
@@ -416,13 +406,11 @@ def clean_display_phone(raw):
 
 
 def format_wa_phone(raw):
-    """מחזיר מספר בפורמט בינלאומי (972...) רק לנייד ישראלי תקין, אחרת None."""
     disp = clean_display_phone(raw)
     return "972" + disp[1:] if disp.startswith("05") and len(disp) == 10 else None
 
 
 def parse_date(value):
-    """ממיר טקסט תאריך (בכמה פורמטים נפוצים) ל-date, או None אם אין / לא מזוהה."""
     text = clean_str(value).split(" ")[0]
     for fmt in DATE_FORMATS:
         try:
@@ -433,7 +421,6 @@ def parse_date(value):
 
 
 def encode_eta(picked_date, no_eta):
-    """מקודד את בחירת הספק לטקסט שנשמר: 'אין צפי' / DD/MM/YYYY / ריק."""
     if no_eta:
         return NO_ETA
     if picked_date is None or pd.isna(picked_date):
@@ -442,7 +429,6 @@ def encode_eta(picked_date, no_eta):
 
 
 def attention_reason(status, note, expected, due):
-    """סיבות לסימון ⚠️ (מחרוזת ריקה = אין צורך בטיפול)."""
     status = str(status or "").strip()
     reasons = []
     if str(note or "").strip():
@@ -521,20 +507,23 @@ def render_top_bar(user):
 
 
 # ==================== 5ב. ממשק מנהל ומדורים ====================
-def render_staff(conn):
-    if not USE_PG:
+def render_staff(conn, user):
+    if USE_PG:
+        st.success("🟢 מחובר למסד הנתונים הקבוע בענן (Neon PostgreSQL) – כל ההזמנות, העדכונים ותגובות הספקים נשמרים לצמיתות.")
+    else:
         st.warning("⚠️ המערכת עובדת עם מסד נתונים **זמני**: הנתונים יימחקו באתחול או בעדכון קוד. "
-                   "הגדירו DATABASE_URL ב-Secrets לחיבור למסד קבוע.")
-    tab_orders, tab_wa, tab_upload = st.tabs(["📊 הזמנות ומענה", "💬 שיגור וואטסאפ אוטומטי", "📥 טעינת אקסל"])
+                   "הגדירו DATABASE_URL של Neon ב-Secrets לחיבור למסד קבוע.")
+    tab_orders, tab_wa, tab_upload = st.tabs(["📊 הזמנות ומענה", "💬 שיגור וואטסאפ אוטומטי", "📥 טעינת אקסל (VLOOKUP חכם)"])
     with tab_orders:
-        render_orders_tab(conn)
+        render_orders_tab(conn, user)
     with tab_wa:
         render_whatsapp_tab(conn)
     with tab_upload:
         render_upload_tab(conn)
 
 
-def render_orders_tab(conn):
+def render_orders_tab(conn, user):
+    is_admin = (user["role"] == "admin")
     df = query_df(conn, "SELECT * FROM orders ORDER BY needs_attention DESC, supplier_name, order_number")
     if df.empty:
         st.info("אין עדיין הזמנות במערכת. עבור ללשונית 'טעינת אקסל' כדי להעלות קובץ.")
@@ -560,17 +549,20 @@ def render_orders_tab(conn):
         view = view[not_done(view["supplier_status"])]
 
     if mode.startswith("📱"):
-        render_staff_cards(conn, view)
+        render_staff_cards(conn, view, is_admin)
     else:
-        render_staff_table(conn, view)
+        render_staff_table(conn, view, is_admin)
 
     st.download_button(
         "📥 הורד דוח אקסל מלא (כולל אנשי קשר וטלפונים)",
         data=export_excel(df), file_name="suppliers_updated.xlsx", use_container_width=True,
     )
 
+    if is_admin:
+        render_admin_delete_panel(conn, df)
 
-def render_staff_cards(conn, view):
+
+def render_staff_cards(conn, view, is_admin=False):
     st.caption("🔒 נתוני הספק נעולים. לחץ על הזמנה לצפייה באיש הקשר, בטלפון ולהזנת מענה מדור.")
     for _, r in view.iterrows():
         icon = "⚠️" if r["needs_attention"] == 1 else "📦"
@@ -588,68 +580,135 @@ def render_staff_cards(conn, view):
             st.markdown(f"🔒 **תגובת / הערת ספק:** {r['supplier_note'] or 'אין הערות'}")
 
             reply = st.text_area("✍️ מענה מדור לספק:", value=r["mador_response"], key=f"mresp_{r['id']}")
-            if st.button("💾 שמור מענה לשורה זו", key=f"msave_{r['id']}", type="primary", use_container_width=True):
-                now = datetime.now().strftime("%d/%m/%Y %H:%M")
-                conn.execute("UPDATE orders SET mador_response=?, needs_attention=0, last_updated=? WHERE id=?", (reply, now, r["id"]))
-                conn.commit()
-                st.success("מענה המדור נשמר!")
-                st.rerun()
+            c_save, c_del = st.columns([3, 1]) if is_admin else (st.container(), None)
+            with c_save:
+                if st.button("💾 שמור מענה לשורה זו", key=f"msave_{r['id']}", type="primary", use_container_width=True):
+                    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    conn.execute("UPDATE orders SET mador_response=?, needs_attention=0, last_updated=? WHERE id=?", (reply, now, r["id"]))
+                    conn.commit()
+                    st.success("מענה המדור נשמר!")
+                    st.rerun()
+            if is_admin and c_del is not None:
+                with c_del:
+                    if st.button("🗑️ מחק שורה", key=f"mdel_{r['id']}", use_container_width=True):
+                        delete_orders_by_ids(conn, [r["id"]])
+                        st.success(f"הזמנה {r['order_number']} שורה {r['line_number']} נמחקה!")
+                        st.rerun()
 
 
-def render_staff_table(conn, view):
-    st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. המדור יכול לעדכן איש קשר, טלפון, מק"ט ומענה מדור.')
+def render_staff_table(conn, view, is_admin=False):
+    if is_admin:
+        st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. כמנהל מערכת, תוכל גם לסמן שורות בעמודת "🗑️ מחק שורה" כדי להסיר הזמנות שהסתיימו.')
+    else:
+        st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. המדור יכול לעדכן איש קשר, טלפון, מק"ט ומענה מדור.')
+
     view = view.copy()
     view["attention"] = [
         attention_reason(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"]) if r["needs_attention"] == 1 else ""
         for _, r in view.iterrows()
     ]
-    cols = ["id", "attention", "supplier_name", "contact_person", "supplier_phone", "order_number", "line_number",
-            "part_number", "item_description", "due_date", "supplier_status", "expected_date",
-            "supplier_note", "mador_response"]
+    if is_admin:
+        view["delete_row"] = False
+
+    base_cols = ["id", "attention", "supplier_name", "contact_person", "supplier_phone", "order_number", "line_number",
+                 "part_number", "item_description", "due_date", "supplier_status", "expected_date",
+                 "supplier_note", "mador_response"]
+    cols = base_cols + (["delete_row"] if is_admin else [])
+
     T = st.column_config.TextColumn
+    col_cfg = {
+        "id": None,
+        "attention": T("⚠️ סיבת סימון", disabled=True),
+        "supplier_name": T("חברה", disabled=True),
+        "contact_person": T("👤 איש קשר"),
+        "supplier_phone": T("📞 מספר טלפון"),
+        "order_number": T("מספר הזמנה", disabled=True),
+        "line_number": T("שורה", disabled=True),
+        "part_number": T('מק"ט'),
+        "item_description": T("שם פריט"),
+        "due_date": T("תאריך אספקה"),
+        "supplier_status": T("🔒 סטטוס עדכני", disabled=True),
+        "expected_date": T("🔒 צפי ספק", disabled=True),
+        "supplier_note": T("🔒 תגובת ספק", disabled=True),
+        "mador_response": T("✍️ מענה מדור לספק (ערוך כאן)"),
+    }
+    if is_admin:
+        col_cfg["delete_row"] = st.column_config.CheckboxColumn("🗑️ מחק שורה", default=False)
+
     edited = st.data_editor(
         view[cols],
-        column_config={
-            "id": None,
-            "attention": T("⚠️ סיבת סימון", disabled=True),
-            "supplier_name": T("חברה", disabled=True),
-            "contact_person": T("👤 איש קשר"),
-            "supplier_phone": T("📞 מספר טלפון"),
-            "order_number": T("מספר הזמנה", disabled=True),
-            "line_number": T("שורה", disabled=True),
-            "part_number": T('מק"ט'),
-            "item_description": T("שם פריט"),
-            "due_date": T("תאריך אספקה"),
-            "supplier_status": T("🔒 סטטוס עדכני", disabled=True),
-            "expected_date": T("🔒 צפי ספק", disabled=True),
-            "supplier_note": T("🔒 תגובת ספק", disabled=True),
-            "mador_response": T("✍️ מענה מדור לספק (ערוך כאן)"),
-        },
+        column_config=col_cfg,
         use_container_width=True, hide_index=True,
     )
 
-    if st.button("💾 שמור תשובות מדור ועדכוני אנשי קשר", type="primary", use_container_width=True):
-        now = datetime.now().strftime("%d/%m/%Y %H:%M")
-        for _, r in edited.iterrows():
-            phone = clean_display_phone(r["supplier_phone"])
-            contact = clean_str(r["contact_person"])
-            conn.execute(
-                """UPDATE orders
-                   SET contact_person=?, supplier_phone=?, part_number=?, item_description=?,
-                       due_date=?, mador_response=?, needs_attention=0, last_updated=?
-                   WHERE id=?""",
-                (contact, phone, r["part_number"], r["item_description"], r["due_date"], r["mador_response"], now, r["id"]),
-            )
-            if phone or contact:
+    btn_col1, btn_col2 = st.columns([2, 1]) if is_admin else (st.container(), None)
+    with btn_col1:
+        if st.button("💾 שמור תשובות מדור ועדכוני אנשי קשר", type="primary", use_container_width=True):
+            now = datetime.now().strftime("%d/%m/%Y %H:%M")
+            for _, r in edited.iterrows():
+                phone = clean_display_phone(r["supplier_phone"])
+                contact = clean_str(r["contact_person"])
                 conn.execute(
-                    """UPDATE access_keys
-                       SET phone=COALESCE(NULLIF(?, ''), phone), contact_person=COALESCE(NULLIF(?, ''), contact_person)
-                       WHERE role='supplier' AND entity_name=?""",
-                    (phone, contact, r["supplier_name"]),
+                    """UPDATE orders
+                       SET contact_person=?, supplier_phone=?, part_number=?, item_description=?,
+                           due_date=?, mador_response=?, needs_attention=0, last_updated=?
+                       WHERE id=?""",
+                    (contact, phone, r["part_number"], r["item_description"], r["due_date"], r["mador_response"], now, r["id"]),
                 )
-        conn.commit()
-        st.success("הנתונים ותשובות המדור נשמרו בהצלחה!")
-        st.rerun()
+                if phone or contact:
+                    conn.execute(
+                        """UPDATE access_keys
+                           SET phone=COALESCE(NULLIF(?, ''), phone), contact_person=COALESCE(NULLIF(?, ''), contact_person)
+                           WHERE role='supplier' AND entity_name=?""",
+                        (phone, contact, r["supplier_name"]),
+                    )
+            conn.commit()
+            st.success("הנתונים ותשובות המדור נשמרו בהצלחה!")
+            st.rerun()
+
+    if is_admin and btn_col2 is not None:
+        with btn_col2:
+            to_delete = edited[edited["delete_row"] == True]["id"].tolist()
+            if st.button(f"🗑️ מחק שורות שסומנו ({len(to_delete)})", use_container_width=True):
+                if not to_delete:
+                    st.warning("לא סומנו שורות למחיקה בטבלה. סמן V בעמודת '🗑️ מחק שורה' בצד שמאל של הטבלה.")
+                else:
+                    delete_orders_by_ids(conn, to_delete)
+                    st.success(f"נמחקו {len(to_delete)} שורות הזמנה בהצלחה!")
+                    st.rerun()
+
+
+def render_admin_delete_panel(conn, df):
+    """פאנל ניהול מחיקות מתקדם המוצג אך ורק למנהל המערכת (Admin)."""
+    st.divider()
+    with st.expander("🗑️ ניהול מחיקת הזמנות שהסתיימו / קיבלו מענה (הרשאת מנהל מערכת בלבד)"):
+        st.caption("כאן תוכל למחוק הזמנות שהתקבלו או שהטיפול בהן הסתיים. פעולת מחיקה מסירה את השורות ממסד הנתונים הקבוע.")
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.markdown("**1. מחיקת הזמנה שלמה או שורות נבחרות:**")
+            df_opts = df.copy()
+            df_opts["label"] = [
+                f"הזמנה {r['order_number']} | שורה {r['line_number']} | {r['supplier_name']} ({r['supplier_status']})"
+                for _, r in df_opts.iterrows()
+            ]
+            label_to_id = dict(zip(df_opts["label"], df_opts["id"]))
+            selected_labels = st.multiselect("בחר הזמנות / שורות למחיקה:", options=df_opts["label"].tolist())
+            if selected_labels and st.button(f"🗑️ מחק לצמיתות {len(selected_labels)} שורות שנבחרו", key="del_selected_admin"):
+                ids = [label_to_id[lbl] for lbl in selected_labels]
+                delete_orders_by_ids(conn, ids)
+                st.success(f"נמחקו {len(ids)} שורות מהמערכת!")
+                st.rerun()
+
+        with c2:
+            st.markdown("**2. ניקוי מהיר לפי סטטוס (סופק / טופל):**")
+            done_ids = df[df["supplier_status"].astype(str).str.strip() == DONE_STATUS]["id"].tolist()
+            st.write(f"שורות המסומנות כעת בסטטוס **'{DONE_STATUS}'**: `{len(done_ids)}` שורות.")
+            confirm_done = st.checkbox("אני מאשר מחיקה של כל השורות שסופקו", key="confirm_del_done")
+            if st.button(f"🧹 מחק את כל השורות שסופקו ({len(done_ids)})", disabled=not (confirm_done and done_ids)):
+                delete_orders_by_ids(conn, done_ids)
+                st.success(f"נמחקו {len(done_ids)} שורות שסופקו!")
+                st.rerun()
 
 
 def export_excel(df):
@@ -678,7 +737,6 @@ SUPPLIERS_SQL = '''
 
 
 def build_whatsapp_message(conn, sup, sender):
-    """sup = שורה מטבלת הספקים. מחזיר טקסט הודעה אישי עם קישור כניסה."""
     name = sup["supplier_name"]
     rows = conn.execute(
         "SELECT order_number, line_number, item_description FROM orders "
@@ -701,7 +759,6 @@ def build_whatsapp_message(conn, sup, sender):
 
 
 def build_selenium_script(targets):
-    """סקריפט Selenium שרץ במחשב המקומי ושולח את ההודעות אוטומטית. targets = [(supplier, contact, url)]"""
     return f"""import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -737,7 +794,6 @@ driver.quit()
 
 
 def render_launcher(items):
-    """items = [(supplier, contact, display_phone, wa_me_url)] -> כפתור 'שגר הכול' + כפתורים לכל ספק."""
     urls_js = json.dumps([i[3] for i in items])
     buttons = "".join(
         f'''<a href="{url}" target="_blank" style="display:inline-block;background:#16a34a;color:#fff;padding:10px 16px;
@@ -839,18 +895,23 @@ def render_whatsapp_tab(conn):
         )
 
 
-# ---------- טעינת אקסל ----------
+# ---------- טעינת אקסל (VLOOKUP חכם ללא דריסת תשובות קיימות) ----------
 def render_upload_tab(conn):
-    st.markdown("##### 📥 טעינת קובץ אקסל (`suppliers.xlsx`) - סנכרון מלא של אנשי קשר וטלפונים")
-    st.info("💡 **חשוב:** העלה כאן את קובץ ה-`suppliers.xlsx` ולחץ על הכפתור הכתום – המערכת תציג כמה אנשי קשר וטלפונים נקלטו.")
+    st.markdown("##### 📥 טעינת קובץ אקסל (`suppliers.xlsx`) - מנגנון VLOOKUP חכם למסד הנתונים")
+    st.info(
+        "💡 **איך עובד הסנכרון החכם (VLOOKUP)?**\n"
+        "• **שורות והזמנות חדשות** בקובץ האקסל מתווספות אוטומטית למסד הנתונים.\n"
+        "• **שורות קיימות** (אותו מספר הזמנה + שורה) מתעדכנות בפרטים החדשים **מבלי למחוק או לדרוס** תגובות ספקים, צפי אספקה או מענה מדור שכבר הוזנו באתר!\n"
+        "• **זיכרון אנשי קשר:** אם לספק מוכר חסר טלפון או שם איש קשר בקובץ החדש, המערכת משלימה אותם אוטומטית מהזיכרון."
+    )
     uploaded = st.file_uploader("בחר קובץ Excel או CSV", type=["xlsx", "xls", "csv"])
-    if uploaded and st.button("טען וסנכרן הזמנות, אנשי קשר וטלפונים למערכת ⚡", type="primary", use_container_width=True):
+    if uploaded and st.button("טען וסנכרן הזמנות למסד הנתונים (ללא מחיקת קיימים) ⚡", type="primary", use_container_width=True):
         df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
         df.columns = [str(c).strip() for c in df.columns]
         result = import_orders(conn, df)
         st.success(
-            f"✅ הסנכרון הושלם! נקלטו {result['rows']} שורות הזמנה, "
-            f"{result['contacts']} שורות עם איש קשר, ו-{result['phones']} שורות עם טלפון!"
+            f"✅ הסנכרון למסד הנתונים הושלם! עובדו {result['rows']} שורות הזמנה "
+            f"({result['contacts']} עם איש קשר, {result['phones']} עם טלפון) ללא מחיקת היסטוריה קיימת!"
         )
 
 
@@ -872,7 +933,6 @@ def import_orders(conn, df):
         phone = clean_display_phone(r[col["phone"]]) if col["phone"] else ""
         internal = get(r, "internal")
 
-        # השלמה מהזיכרון אם חסר בשורה הספציפית
         if not phone or not contact:
             mem = conn.execute("SELECT phone, contact_person FROM access_keys WHERE role='supplier' AND entity_name=?", (supplier,)).fetchone()
             if mem:
@@ -894,7 +954,7 @@ def import_orders(conn, df):
             "supplier_phone": phone,
             "due_date": get(r, "due").split(" ")[0],
             "internal_status": internal,
-            "supplier_status": get(r, "status"),  # ריק = לא נדרס אם כבר יש תשובת ספק
+            "supplier_status": get(r, "status"),
             "expected_date": get(r, "expected").split(" ")[0],
             "supplier_note": get(r, "note"),
             "mador_response": get(r, "mador"),
@@ -902,7 +962,19 @@ def import_orders(conn, df):
         }
         names = ", ".join(data)
         placeholders = ", ".join(f":{k}" for k in data)
-        keep = ", ".join(f"{c}=CASE WHEN excluded.{c}!='' THEN excluded.{c} ELSE orders.{c} END" for c in KEEP_IF_EMPTY)
+        # הגנה על תשובות קיימות במסד: אם באתר כבר הוזן סטטוס ספק / צפי / הערת ספק / מענה מדור, האקסל לא ידרוס אותם!
+        protected_by_db = {"supplier_status", "expected_date", "supplier_note", "mador_response"}
+        update_clauses = []
+        for c in KEEP_IF_EMPTY:
+            if c in protected_by_db:
+                update_clauses.append(
+                    f"{c}=CASE WHEN orders.{c} IS NOT NULL AND orders.{c}!='' AND orders.{c}!='טרם עודכן' "
+                    f"THEN orders.{c} WHEN excluded.{c}!='' THEN excluded.{c} ELSE orders.{c} END"
+                )
+            else:
+                update_clauses.append(f"{c}=CASE WHEN excluded.{c}!='' THEN excluded.{c} ELSE orders.{c} END")
+        keep = ", ".join(update_clauses)
+
         conn.execute(
             f"""INSERT INTO orders ({names}) VALUES ({placeholders})
                 ON CONFLICT(order_number, line_number) DO UPDATE SET supplier_name=excluded.supplier_name, {keep}""",
@@ -910,11 +982,9 @@ def import_orders(conn, df):
         )
         rows += 1
 
-    # שורות חדשות בלי סטטוס ספק: ברירת מחדל = סטטוס פנימי, ואם אין - "טרם עודכן"
     conn.execute("""UPDATE orders SET supplier_status = COALESCE(NULLIF(internal_status, ''), 'טרם עודכן')
                     WHERE supplier_status = '' OR supplier_status IS NULL""")
 
-    # סימון ⚠️ לשורות שטרם נענו ע"י מדור ויש בהן הערה / "אין צפי" / צפי באיחור
     pending = conn.execute(
         "SELECT id, supplier_status, supplier_note, expected_date, due_date FROM orders "
         "WHERE COALESCE(mador_response, '') = '' AND needs_attention = 0").fetchall()
@@ -922,7 +992,6 @@ def import_orders(conn, df):
         if needs_attention(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"]):
             conn.execute("UPDATE orders SET needs_attention=1 WHERE id=?", (r["id"],))
 
-    # השלמה רוחבית: איש קשר / טלפון שנמצאו אצל ספק יועתקו לכל שורותיו
     for order_col, key_col in (("contact_person", "contact_person"), ("supplier_phone", "phone")):
         conn.execute(f"""
             UPDATE orders SET {order_col} = (
@@ -944,7 +1013,6 @@ def render_supplier(conn, user):
         st.warning("לא נמצאו הזמנות פתוחות המשויכות אליכם כרגע.")
         return
 
-    # אחרי שליחה - מסך סיום עם אפשרות עריכה
     if st.session_state.submitted:
         render_done_screen(df)
         return
@@ -962,7 +1030,6 @@ def render_supplier(conn, user):
 
 
 def render_supplier_cards(df):
-    """מחזיר רשימת עדכונים אם נלחץ 'שמור', אחרת None."""
     st.caption("🔒 פרטי ההזמנה ותשובות המדור נעולים. מלאו את הסטטוס והצפי לכל פריט ולחצו על כפתור השמירה בתחתית הדף.")
     updates = []
     with st.form("mobile_supplier_form"):
@@ -1029,7 +1096,6 @@ def render_supplier_table(df):
 
 
 def render_done_screen(df):
-    """מסך סיום: אישור, סיכום מה נשלח, וכפתור חזרה לעריכה."""
     st.success('✅ העדכונים נשלחו בהצלחה לחט"ל. תודה רבה!')
     last = df["last_updated"].replace("", pd.NA).dropna()
     if not last.empty:
@@ -1056,7 +1122,6 @@ def run_app(conn):
     st.session_state.setdefault("failed_attempts", 0)
     st.session_state.setdefault("submitted", False)
 
-    # כניסה אוטומטית דרך קישור אישי (?key=...)
     url_key = st.query_params.get("key", "").strip().upper()
     if url_key and not st.session_state.user:
         login_with_key(conn, url_key)
@@ -1068,7 +1133,7 @@ def run_app(conn):
     user = st.session_state.user
     render_top_bar(user)
     if user["role"] in ("admin", "mador"):
-        render_staff(conn)
+        render_staff(conn, user)
     else:
         render_supplier(conn, user)
     st.markdown('<div class="watermark">Powered by BEN HUR</div>', unsafe_allow_html=True)
