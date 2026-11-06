@@ -1,11 +1,11 @@
-"""SAPakim - פורטל הזמנות ספקים (Streamlit + Neon PostgreSQL / SQLite)
+"""SAPakim - פורטל הזמנות ספקים ושו"ב ארגוני (Streamlit + Neon PostgreSQL / SQLite)
 
 מבנה הקובץ:
   1. קונפיגורציה וקבועים
-  2. עיצוב (CSS)
+  2. עיצוב רשמי ויישור דו-כיווני (RTL CSS)
   3. מסד נתונים (Neon PostgreSQL קבוע / SQLite מקומי)
-  4. פונקציות עזר
-  5. מסכים: כניסה / מנהל ומדורים (כולל מחיקת הזמנות למנהל) / ספק
+  4. פונקציות עזר וחישוב ימי פיגור אוטומטי
+  5. מסכים: כניסה / מנהל ומדורים / ספק (עם נעילת תאריך מקורי והחלה אוטומטית)
   6. main()
 """
 import json
@@ -13,7 +13,7 @@ import re
 import secrets
 import sqlite3
 import urllib.parse
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 
 import pandas as pd
@@ -21,7 +21,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="SAPakim - פורטל הזמנות",
+    page_title="SAPakim - מערכת שו\"ב הזמנות וספקים",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -33,14 +33,28 @@ APP_URL = "https://sapakim-kukmcxaux8yf9tfjrygif9.streamlit.app"
 MAX_LOGIN_ATTEMPTS = 5
 DONE_STATUS = "סופק"
 NO_ETA = "אין צפי"
-DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y")
+DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y", "%d/%m/%y")
 
 STATUS_OPTIONS = [
-    "טרם עודכן", "תקין - בייצור", "בטיפול - שבוע הבא", "בטיפול מיידי",
-    "מוכן לאספקה", 'ממתין לבק"מ', "חסר שרטוט / דרוש מענה מדור",
-    "מעוכב - חוסר חומר גלם", "עיכוב / בפיגור", DONE_STATUS,
+    "טרם עודכן",
+    "תקין - בייצור",
+    "בטיפול - שבוע הבא",
+    "בטיפול מיידי",
+    "מוכן לאספקה",
+    'ממתין לבק"מ',
+    "חסר שרטוט / דרוש מענה מדור",
+    "מעוכב - חוסר חומר גלם",
+    "עיכוב / בפיגור",
+    DONE_STATUS,
 ]
-ALERT_WORDS = ("שרטוט", "עיכוב", "מעוכב")
+ALERT_WORDS = ("שרטוט", "עיכוב", "מעוכב", "פיגור", "חוסר")
+
+# ביטויים גנריים ישנים שיימחקו אוטומטית מתגובות הספק כדי שהספק יזין מידע אמיתי
+OBSOLETE_NOTES = (
+    "כל השאר אבדוק ואעדכן",
+    "כל השאר אבדוק",
+    "כל השאר סופק",
+)
 
 STAFF_KEYS = [
     ("BH-ADMIN-9920", "admin", "רועי - מנהל מערכת ראשי"),
@@ -73,15 +87,24 @@ KEEP_IF_EMPTY = [
 ]
 
 EXPORT_MAP = {
-    "מספר הזמנה": "order_number", "שורה": "line_number", "שם פריט": "item_description",
-    'מק"ט': "part_number", "תאריך אספקה": "due_date", "חברה": "supplier_name",
-    "סטטוס אחרון": "internal_status", "איש קשר": "contact_person",
-    "מספר טלפון": "supplier_phone", "צפי ספק": "expected_date",
-    "סטטוס עדכני": "supplier_status", "תגובת ספק": "supplier_note",
-    "מענה מדור": "mador_response", "תאריך_עדכון_אחרון": "last_updated",
+    "מספר הזמנה": "order_number",
+    "שורה": "line_number",
+    "שם פריט": "item_description",
+    'מק"ט': "part_number",
+    "תאריך אספקה מקורי": "due_date",
+    "פיגור בימים": "delay_days_display",
+    "חברה": "supplier_name",
+    "סטטוס אחרון": "internal_status",
+    "איש קשר": "contact_person",
+    "מספר טלפון": "supplier_phone",
+    "צפי ספק": "expected_date",
+    "סטטוס עדכני": "supplier_status",
+    "תגובת ספק": "supplier_note",
+    "מענה מדור": "mador_response",
+    "תאריך_עדכון_אחרון": "last_updated",
 }
 
-# ==================== 2. עיצוב ====================
+# ==================== 2. עיצוב רשמי ויישור קפדני לימין (RTL) ====================
 CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap');
@@ -89,7 +112,8 @@ CSS = """
     :root, html, body, .stApp {
         color-scheme: light !important;
         font-family: 'Rubik', sans-serif !important;
-        direction: rtl; text-align: right;
+        direction: rtl !important;
+        text-align: right !important;
         background: linear-gradient(180deg, #fffbeb 0%, #f8fafc 35%, #f1f5f9 100%) !important;
         color: #0f172a !important;
     }
@@ -100,34 +124,65 @@ CSS = """
         height: 3.2rem !important; z-index: 999 !important;
     }
     .block-container {
-        max-width: 1240px !important; margin: 0 auto !important;
+        max-width: 1280px !important; margin: 0 auto !important;
         padding-top: 4.2rem !important; padding-bottom: 3rem !important;
+        direction: rtl !important; text-align: right !important;
     }
-    p, span, label, div, h1, h2, h3, h4, h5, h6, li, th, td { color: #0f172a; }
+
+    /* יישור לימין קפדני לכל סוגי הטקסט (כולל משולב עברית-אנגלית-מספרים) */
+    p, span, label, div, h1, h2, h3, h4, h5, h6, li, th, td,
+    .stMarkdown, .stText, .stCaption, [data-testid="stMarkdownContainer"] {
+        color: #0f172a;
+        direction: rtl !important;
+        text-align: right !important;
+        unicode-bidi: plaintext !important;
+    }
+
+    /* יישור לימין בתוך טבלאות st.dataframe ו-st.data_editor */
+    [data-testid="stDataFrame"] *, [data-testid="stDataEditor"] *, .dvn-scroller * {
+        direction: rtl !important;
+        text-align: right !important;
+    }
 
     .header-box {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 65%, #78350f 100%);
         padding: 1.3rem 1.8rem; border-radius: 16px; border-bottom: 4px solid #f59e0b;
-        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12); margin-bottom: 1.4rem; text-align: center;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12); margin-bottom: 1.4rem;
+        direction: rtl !important; text-align: right !important;
     }
-    .header-title { font-size: 1.45rem !important; font-weight: 700 !important; color: #fff !important; margin: 0 !important; }
-    .header-sub { font-size: 0.88rem !important; color: #fcd34d !important; margin-top: 0.3rem !important; font-weight: 500; }
+    .header-title {
+        font-size: 1.45rem !important; font-weight: 700 !important; color: #fff !important;
+        margin: 0 !important; direction: rtl !important; text-align: right !important;
+    }
+    .header-sub {
+        font-size: 0.9rem !important; color: #fcd34d !important; margin-top: 0.35rem !important;
+        font-weight: 500; direction: rtl !important; text-align: right !important;
+    }
 
     div[data-testid="metric-container"] {
         background: #fff !important; padding: 0.9rem 1.1rem !important; border-radius: 14px !important;
         border: 1px solid #e2e8f0 !important; border-right: 5px solid #d97706 !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.04) !important;
+        direction: rtl !important; text-align: right !important;
     }
-    div[data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 700 !important; direction: ltr; text-align: right; }
-    div[data-testid="stMetricLabel"] p { font-size: 0.85rem !important; font-weight: 600 !important; color: #475569 !important; }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.5rem !important; font-weight: 700 !important;
+        direction: rtl !important; text-align: right !important;
+    }
+    div[data-testid="stMetricLabel"] p {
+        font-size: 0.85rem !important; font-weight: 600 !important; color: #475569 !important;
+        direction: rtl !important; text-align: right !important;
+    }
 
     input, textarea, select, [data-baseweb="select"] > div, [data-baseweb="input"] input {
         background-color: #fff !important; color: #0f172a !important;
-        -webkit-text-fill-color: #0f172a !important; border-color: #cbd5e1 !important; font-weight: 500 !important;
+        -webkit-text-fill-color: #0f172a !important; border-color: #cbd5e1 !important;
+        font-weight: 500 !important; direction: rtl !important; text-align: right !important;
     }
     [data-baseweb="select"] svg { fill: #0f172a !important; }
     label[data-testid="stWidgetLabel"] p, .stRadio label p, .stCheckbox label p {
         color: #0f172a !important; font-weight: 600 !important; font-size: 0.9rem !important;
+        direction: rtl !important; text-align: right !important;
     }
 
     [data-baseweb="popover"]:has([role="listbox"]), [data-baseweb="popover"]:has([role="listbox"]) *,
@@ -141,6 +196,8 @@ CSS = """
         opacity: 1 !important;
         font-family: 'Rubik', sans-serif !important;
         font-size: 16px !important;
+        direction: rtl !important;
+        text-align: right !important;
     }
     [role="option"], [role="option"] * { min-height: 44px; }
 
@@ -150,11 +207,6 @@ CSS = """
     [data-testid="stDateInputField"] * {
         color: #0f172a !important; -webkit-text-fill-color: #0f172a !important;
         font-family: 'Rubik', sans-serif !important; font-size: 16px !important;
-    }
-    [data-testid="stDateInputField"] [data-placeholder="true"] { color: #64748b !important; -webkit-text-fill-color: #64748b !important; }
-    [data-testid="stDateInputField"] [role="spinbutton"][data-focused="true"],
-    [data-testid="stDateInputField"] [role="spinbutton"]:focus {
-        background-color: #d97706 !important; color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; border-radius: 4px;
     }
 
     [data-testid="stDateInputCalendar"] {
@@ -178,11 +230,22 @@ CSS = """
     .order-card-header {
         background: linear-gradient(90deg, #fef3c7 0%, #fffbeb 100%); padding: 0.75rem 1rem;
         border-radius: 10px; border-right: 5px solid #d97706; margin-bottom: 0.7rem; font-size: 0.92rem;
+        direction: rtl !important; text-align: right !important;
     }
     .order-card-header, .order-card-header strong, .order-card-header span { color: #78350f !important; }
     .locked-badge {
         background: #e2e8f0; color: #1e293b !important; padding: 0.3rem 0.65rem; border-radius: 8px;
         font-size: 0.82rem; font-weight: 600; display: inline-block; margin-left: 0.4rem; margin-bottom: 0.4rem;
+    }
+    .delay-badge-red {
+        background: #fee2e2; color: #991b1b !important; border: 1px solid #fca5a5;
+        padding: 0.3rem 0.65rem; border-radius: 8px; font-size: 0.82rem; font-weight: 700;
+        display: inline-block; margin-left: 0.4rem; margin-bottom: 0.4rem;
+    }
+    .delay-badge-green {
+        background: #dcfce7; color: #166534 !important; border: 1px solid #86efac;
+        padding: 0.3rem 0.65rem; border-radius: 8px; font-size: 0.82rem; font-weight: 700;
+        display: inline-block; margin-left: 0.4rem; margin-bottom: 0.4rem;
     }
 
     button[kind^="primary"], button[data-testid^="stBaseButton-primary"] {
@@ -197,7 +260,10 @@ CSS = """
     }
     button[kind^="secondary"] *, button[data-testid^="stBaseButton-secondary"] * { color: #0f172a !important; }
 
-    .watermark { text-align: center; font-size: 0.78rem; color: #64748b !important; margin-top: 2.2rem; font-weight: 600; letter-spacing: 0.5px; }
+    .watermark {
+        text-align: center !important; font-size: 0.78rem; color: #64748b !important;
+        margin-top: 2.2rem; font-weight: 600; letter-spacing: 0.5px;
+    }
 
     @media (max-width: 768px) {
         .block-container { padding: 3.8rem 0.6rem 3rem 0.6rem !important; }
@@ -323,6 +389,18 @@ def init_db():
             except sqlite3.OperationalError:
                 pass
 
+    # ניקוי חד-פעמי של ההערה הגנרית הישנה "כל השאר אבדוק ואעדכן" משורות קיימות במסד
+    for obs in OBSOLETE_NOTES:
+        conn.execute("UPDATE orders SET supplier_note='' WHERE TRIM(supplier_note)=?", (obs,))
+
+    # מילוי אוטומטי של תאריך האספקה המקורי לתוך צפי הספק לשורות שבהן הצפי עדיין ריק
+    conn.execute("""
+        UPDATE orders
+        SET expected_date = due_date
+        WHERE (expected_date IS NULL OR TRIM(expected_date) = '')
+          AND due_date IS NOT NULL AND TRIM(due_date) != ''
+    """)
+
     conn.execute("DELETE FROM access_keys WHERE role IN ('admin', 'mador')")
     for key, role, name in STAFF_KEYS:
         conn.execute("INSERT INTO access_keys (access_key, role, entity_name) VALUES (?, ?, ?)", (key, role, name))
@@ -360,29 +438,38 @@ def save_supplier_updates(conn, supplier_name, updates):
     due_by_id = {int(r["id"]): r["due_date"] for r in
                  conn.execute("SELECT id, due_date FROM orders WHERE supplier_name=?", (supplier_name,)).fetchall()}
     for order_id, status, expected, note in updates:
-        flag = needs_attention(status, note, expected, due_by_id.get(int(order_id), ""))
+        clean_nt = clean_supplier_note(note)
+        flag = needs_attention(status, clean_nt, expected, due_by_id.get(int(order_id), ""))
         conn.execute(
             """UPDATE orders
                SET supplier_status=?, expected_date=?, supplier_note=?, needs_attention=?, last_updated=?
                WHERE id=? AND supplier_name=?""",
-            (status, expected, note, int(flag), now, int(order_id), supplier_name),
+            (status, expected, clean_nt, int(flag), now, int(order_id), supplier_name),
         )
     conn.commit()
 
 
 def delete_orders_by_ids(conn, order_ids):
-    """מוחק שורות הזמנה לפי רשימת מזהים (מורשה למנהל מערכת בלבד)."""
     for oid in order_ids:
         conn.execute("DELETE FROM orders WHERE id=?", (int(oid),))
     conn.commit()
 
 
-# ==================== 4. פונקציות עזר ====================
+# ==================== 4. פונקציות עזר וחישוב פיגור בימים ====================
 def clean_str(val):
     if val is None or pd.isna(val):
         return ""
     s = str(val).strip()
     return "" if s.lower() in ("nan", "none", "null") else s
+
+
+def clean_supplier_note(val):
+    """מסנן משפטים גנריים ישנים כגון 'כל השאר אבדוק ואעדכן'."""
+    s = clean_str(val)
+    for obs in OBSOLETE_NOTES:
+        if s == obs or s.startswith(obs):
+            return ""
+    return s
 
 
 def find_col(columns, candidates):
@@ -412,6 +499,8 @@ def format_wa_phone(raw):
 
 def parse_date(value):
     text = clean_str(value).split(" ")[0]
+    if not text:
+        return None
     for fmt in DATE_FORMATS:
         try:
             return datetime.strptime(text, fmt).date()
@@ -420,11 +509,57 @@ def parse_date(value):
     return None
 
 
-def encode_eta(picked_date, no_eta):
+def format_date_il(value):
+    """מציג תאריך בפורמט ישראלי אחיד DD/MM/YYYY."""
+    d = parse_date(value)
+    return d.strftime("%d/%m/%Y") if d else clean_str(value)
+
+
+def calc_delay_days_int(due_str, status=""):
+    """מחשב פיגור בימים ביחס לתאריך האספקה המקורי (חיובי = בפיגור, 0 או שלילי = בזמן)."""
+    if str(status or "").strip() == DONE_STATUS:
+        return 0
+    due_d = parse_date(due_str)
+    if not due_d:
+        return None
+    return (date.today() - due_d).days
+
+
+def format_delay_days(due_str, status=""):
+    """מחזיר תצוגה ברורה של פיגור בימים ביחס לתאריך האספקה המקורי."""
+    if str(status or "").strip() == DONE_STATUS:
+        return "✅ סופק"
+    diff = calc_delay_days_int(due_str, status)
+    if diff is None:
+        return "ללא תאריך יעד"
+    if diff > 0:
+        return f"🔴 {diff} ימים בפיגור"
+    if diff == 0:
+        return "🟡 מועד אספקה היום"
+    return f"🟢 עוד {abs(diff)} ימים"
+
+
+def enrich_delay_columns(df):
+    """מוסיף ל-DataFrame עמודת מספר ימי פיגור ועמודת תצוגת פיגור בימים."""
+    df = df.copy()
+    if df.empty:
+        df["delay_days_num"] = []
+        df["delay_days_display"] = []
+        return df
+    df["delay_days_num"] = [
+        calc_delay_days_int(r["due_date"], r["supplier_status"]) for _, r in df.iterrows()
+    ]
+    df["delay_days_display"] = [
+        format_delay_days(r["due_date"], r["supplier_status"]) for _, r in df.iterrows()
+    ]
+    return df
+
+
+def encode_eta(picked_date, no_eta, fallback_due=""):
     if no_eta:
         return NO_ETA
     if picked_date is None or pd.isna(picked_date):
-        return ""
+        return format_date_il(fallback_due)
     return picked_date.strftime("%d/%m/%Y")
 
 
@@ -441,7 +576,7 @@ def attention_reason(status, note, expected, due):
         else:
             eta, due_date = parse_date(expected), parse_date(due)
             if eta and due_date and eta > due_date:
-                reasons.append(f"צפי באיחור של {(eta - due_date).days} ימים מתאריך האספקה")
+                reasons.append(f"צפי ספק מאוחר ב-{(eta - due_date).days} ימים מתאריך המקור")
     return " | ".join(reasons)
 
 
@@ -458,14 +593,14 @@ def render_login(conn):
     _, center, _ = st.columns([0.8, 2, 0.8])
     with center:
         st.markdown("""
-        <div class="header-box">
-            <div class="header-title">🛡️ פורטל SAPakim</div>
-            <div class="header-sub">מערכת ארגונית מאובטחת לבקרת הזמנות ותקשורת ספקים</div>
+        <div class="header-box" style="text-align: center !important;">
+            <div class="header-title" style="text-align: center !important;">🛡️ פורטל SAPakim - חט"ל</div>
+            <div class="header-sub" style="text-align: center !important;">מערכת שו"ב ארגונית לבקרת הזמנות, מעקב פיגורים ותקשורת ספקים</div>
         </div>""", unsafe_allow_html=True)
 
         with st.container(border=True):
             st.markdown("##### הזדהות וכניסה למערכת")
-            st.caption("אנא הזן את מפתח הגישה האישי (Access Key) שלך.")
+            st.caption("אנא הזן את מפתח הגישה האישי (Access Key) שהונפק עבורך.")
 
             if st.session_state.failed_attempts >= MAX_LOGIN_ATTEMPTS:
                 st.error("הגעת למספר הניסיונות המקסימלי. אנא רענן את הדף או פנה למנהל המערכת.")
@@ -490,13 +625,28 @@ def login_with_key(conn, key):
     return False
 
 
-def render_top_bar(user):
+def render_top_bar(conn, user):
+    # אם זה ספק - נשלוף את שם איש הקשר שלו ונציג אותו בכותרת העליונה בלבד!
+    contact_str = clean_str(user.get("contact_person", ""))
+    if user["role"] == "supplier" and not contact_str:
+        r_c = conn.execute(
+            "SELECT contact_person FROM orders WHERE supplier_name=? AND contact_person != '' LIMIT 1",
+            (user["entity_name"],),
+        ).fetchone()
+        if r_c:
+            contact_str = clean_str(r_c["contact_person"])
+
+    if user["role"] == "supplier":
+        sub_text = f"👤 איש קשר: {contact_str}" if contact_str else "פורטל עדכון סטטוס הזמנות ספק"
+    else:
+        sub_text = f"מחובר בהרשאת: {user['role']}"
+
     c1, c2 = st.columns([4.5, 1])
     with c1:
         st.markdown(f"""
-        <div class="header-box" style="text-align: right;">
+        <div class="header-box">
             <div class="header-title">🛡️ SAPakim | שלום, {user['entity_name']}</div>
-            <div class="header-sub">מחובר בהרשאת: {user['role']}</div>
+            <div class="header-sub">{sub_text}</div>
         </div>""", unsafe_allow_html=True)
     with c2:
         if st.button("התנתק 🚪", use_container_width=True):
@@ -509,11 +659,14 @@ def render_top_bar(user):
 # ==================== 5ב. ממשק מנהל ומדורים ====================
 def render_staff(conn, user):
     if USE_PG:
-        st.success("🟢 מחובר למסד הנתונים הקבוע בענן (Neon PostgreSQL) – כל ההזמנות, העדכונים ותגובות הספקים נשמרים לצמיתות.")
+        st.success("🟢 מחובר למסד הנתונים הקבוע בענן (Neon PostgreSQL) – כל ההזמנות, ימי הפיגור ותגובות הספקים שמורים ומגובים.")
     else:
-        st.warning("⚠️ המערכת עובדת עם מסד נתונים **זמני**: הנתונים יימחקו באתחול או בעדכון קוד. "
-                   "הגדירו DATABASE_URL של Neon ב-Secrets לחיבור למסד קבוע.")
-    tab_orders, tab_wa, tab_upload = st.tabs(["📊 הזמנות ומענה", "💬 שיגור וואטסאפ אוטומטי", "📥 טעינת אקסל (VLOOKUP חכם)"])
+        st.warning("⚠️ המערכת עובדת עם מסד נתונים זמני. הגדירו DATABASE_URL של Neon ב-Secrets לחיבור קבוע.")
+    tab_orders, tab_wa, tab_upload = st.tabs([
+        "📊 הזמנות, פיגורים ומענה מדור",
+        "💬 שיגור וואטסאפ אוטומטי",
+        "📥 טעינת אקסל (VLOOKUP חכם)",
+    ])
     with tab_orders:
         render_orders_tab(conn, user)
     with tab_wa:
@@ -529,17 +682,20 @@ def render_orders_tab(conn, user):
         st.info("אין עדיין הזמנות במערכת. עבור ללשונית 'טעינת אקסל' כדי להעלות קובץ.")
         return
 
-    k1, k2 = st.columns(2)
-    k3, k4 = st.columns(2)
+    df = enrich_delay_columns(df)
+    overdue_mask = df["delay_days_num"].fillna(0) > 0
+    avg_delay = int(df.loc[overdue_mask, "delay_days_num"].mean()) if overdue_mask.any() else 0
+
+    k1, k2, k3, k4 = st.columns(4)
     k1.metric('סה"כ שורות הזמנה', len(df))
-    k2.metric("שורות עם שם איש קשר", int((df["contact_person"].astype(str).str.strip() != "").sum()))
-    k3.metric("בעיכוב / בטיפול / טרם סופק", int(not_done(df["supplier_status"]).sum()))
+    k2.metric("שורות בפיגור מתאריך המקור", int(overdue_mask.sum()))
+    k3.metric("ממוצע ימי פיגור", f"{avg_delay} ימים")
     k4.metric("⚠️ ממתינות למענה מדור", int((df["needs_attention"] == 1).sum()))
 
     f1, f2 = st.columns([1.5, 1])
     search = f1.text_input('🔍 חיפוש מהיר (לפי ספק, איש קשר, טלפון, הזמנה או מק"ט):', "")
     mode = f2.radio("תצוגה:", ["💻 טבלה מלאה", "📱 כרטיסיות (לנייד)"], horizontal=True)
-    only_open = st.checkbox("הצג רק שורות פתוחות / בעיכוב (הסתר שורות שסופקו)", value=False)
+    only_open = st.checkbox("הצג רק שורות פתוחות / בפיגור (הסתר שורות שסופקו)", value=False)
 
     view = df.copy()
     if search:
@@ -554,7 +710,7 @@ def render_orders_tab(conn, user):
         render_staff_table(conn, view, is_admin)
 
     st.download_button(
-        "📥 הורד דוח אקסל מלא (כולל אנשי קשר וטלפונים)",
+        "📥 הורד דוח אקסל מלא (כולל עמודת פיגור בימים, אנשי קשר וטלפונים)",
         data=export_excel(df), file_name="suppliers_updated.xlsx", use_container_width=True,
     )
 
@@ -563,20 +719,20 @@ def render_orders_tab(conn, user):
 
 
 def render_staff_cards(conn, view, is_admin=False):
-    st.caption("🔒 נתוני הספק נעולים. לחץ על הזמנה לצפייה באיש הקשר, בטלפון ולהזנת מענה מדור.")
+    st.caption("🔒 נתוני הספק נעולים. לחץ על הזמנה לצפייה בימי הפיגור, באיש הקשר ולהזנת מענה מדור.")
     for _, r in view.iterrows():
         icon = "⚠️" if r["needs_attention"] == 1 else "📦"
-        with st.expander(f"{icon} {r['supplier_name']} | 👤 {r['contact_person'] or 'ללא איש קשר'} | הזמנה {r['order_number']}"):
+        with st.expander(f"{icon} {r['supplier_name']} | הזמנה {r['order_number']} שורה {r['line_number']} | {r['delay_days_display']}"):
             st.markdown(f"""
             <div class="order-card-header">
-                <strong>פריט:</strong> {r['item_description']} | <strong>מק"ט:</strong> {r['part_number']} | <strong>שורה:</strong> {r['line_number']}<br>
-                <strong>👤 איש קשר:</strong> {r['contact_person'] or '-'} | <strong>📞 טלפון:</strong> {r['supplier_phone'] or 'חסר'}
+                <strong>פריט:</strong> {r['item_description']} | <strong>מק"ט:</strong> {r['part_number']} | <strong>תאריך מקורי:</strong> {r['due_date'] or '-'}<br>
+                <strong>⏳ סטטוס פיגור:</strong> {r['delay_days_display']} | <strong>👤 איש קשר:</strong> {r['contact_person'] or '-'} | <strong>📞 טלפון:</strong> {r['supplier_phone'] or 'חסר'}
             </div>""", unsafe_allow_html=True)
             if r["needs_attention"] == 1:
                 reason = attention_reason(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"])
                 if reason:
                     st.warning(f"⚠️ סיבת הסימון: {reason}")
-            st.markdown(f"🔒 **סטטוס עדכני:** `{r['supplier_status']}` | **צפי ספק:** `{r['expected_date'] or 'לא הוזן'}`")
+            st.markdown(f"🔒 **סטטוס עדכני:** `{r['supplier_status']}` | **צפי ספק:** `{r['expected_date'] or r['due_date'] or 'לא הוזן'}`")
             st.markdown(f"🔒 **תגובת / הערת ספק:** {r['supplier_note'] or 'אין הערות'}")
 
             reply = st.text_area("✍️ מענה מדור לספק:", value=r["mador_response"], key=f"mresp_{r['id']}")
@@ -598,7 +754,7 @@ def render_staff_cards(conn, view, is_admin=False):
 
 def render_staff_table(conn, view, is_admin=False):
     if is_admin:
-        st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. כמנהל מערכת, תוכל גם לסמן שורות בעמודת "🗑️ מחק שורה" כדי להסיר הזמנות שהסתיימו.')
+        st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. עמודת "⏳ פיגור בימים" מחושבת אוטומטית ביחס לתאריך האספקה המקורי.')
     else:
         st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. המדור יכול לעדכן איש קשר, טלפון, מק"ט ומענה מדור.')
 
@@ -610,9 +766,12 @@ def render_staff_table(conn, view, is_admin=False):
     if is_admin:
         view["delete_row"] = False
 
-    base_cols = ["id", "attention", "supplier_name", "contact_person", "supplier_phone", "order_number", "line_number",
-                 "part_number", "item_description", "due_date", "supplier_status", "expected_date",
-                 "supplier_note", "mador_response"]
+    base_cols = [
+        "id", "attention", "supplier_name", "contact_person", "supplier_phone",
+        "order_number", "line_number", "part_number", "item_description",
+        "due_date", "delay_days_display", "supplier_status", "expected_date",
+        "supplier_note", "mador_response",
+    ]
     cols = base_cols + (["delete_row"] if is_admin else [])
 
     T = st.column_config.TextColumn
@@ -626,7 +785,8 @@ def render_staff_table(conn, view, is_admin=False):
         "line_number": T("שורה", disabled=True),
         "part_number": T('מק"ט'),
         "item_description": T("שם פריט"),
-        "due_date": T("תאריך אספקה"),
+        "due_date": T("תאריך אספקה מקורי"),
+        "delay_days_display": T("⏳ פיגור בימים", disabled=True),
         "supplier_status": T("🔒 סטטוס עדכני", disabled=True),
         "expected_date": T("🔒 צפי ספק", disabled=True),
         "supplier_note": T("🔒 תגובת ספק", disabled=True),
@@ -671,7 +831,7 @@ def render_staff_table(conn, view, is_admin=False):
             to_delete = edited[edited["delete_row"] == True]["id"].tolist()
             if st.button(f"🗑️ מחק שורות שסומנו ({len(to_delete)})", use_container_width=True):
                 if not to_delete:
-                    st.warning("לא סומנו שורות למחיקה בטבלה. סמן V בעמודת '🗑️ מחק שורה' בצד שמאל של הטבלה.")
+                    st.warning("לא סומנו שורות למחיקה בטבלה.")
                 else:
                     delete_orders_by_ids(conn, to_delete)
                     st.success(f"נמחקו {len(to_delete)} שורות הזמנה בהצלחה!")
@@ -679,10 +839,9 @@ def render_staff_table(conn, view, is_admin=False):
 
 
 def render_admin_delete_panel(conn, df):
-    """פאנל ניהול מחיקות מתקדם המוצג אך ורק למנהל המערכת (Admin)."""
     st.divider()
     with st.expander("🗑️ ניהול מחיקת הזמנות שהסתיימו / קיבלו מענה (הרשאת מנהל מערכת בלבד)"):
-        st.caption("כאן תוכל למחוק הזמנות שהתקבלו או שהטיפול בהן הסתיים. פעולת מחיקה מסירה את השורות ממסד הנתונים הקבוע.")
+        st.caption("כאן תוכל למחוק הזמנות שהתקבלו או שהטיפול בהן הסתיים.")
         c1, c2 = st.columns(2)
 
         with c1:
@@ -712,7 +871,8 @@ def render_admin_delete_panel(conn, df):
 
 
 def export_excel(df):
-    export_df = pd.DataFrame({heb: df[col] for heb, col in EXPORT_MAP.items()})
+    df_enriched = enrich_delay_columns(df)
+    export_df = pd.DataFrame({heb: df_enriched[col] for heb, col in EXPORT_MAP.items()})
     out = BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         export_df.to_excel(writer, index=False, sheet_name="Sheet")
@@ -739,12 +899,15 @@ SUPPLIERS_SQL = '''
 def build_whatsapp_message(conn, sup, sender):
     name = sup["supplier_name"]
     rows = conn.execute(
-        "SELECT order_number, line_number, item_description FROM orders "
+        "SELECT order_number, line_number, item_description, due_date FROM orders "
         "WHERE supplier_name=? AND TRIM(COALESCE(supplier_status, '')) != ?", (name, DONE_STATUS)).fetchall()
     if not rows:
         rows = conn.execute(
-            "SELECT order_number, line_number, item_description FROM orders WHERE supplier_name=?", (name,)).fetchall()
-    lines = "\n".join(f"• הזמנה {o['order_number']} שורה {o['line_number']} - {o['item_description']}" for o in rows[:10])
+            "SELECT order_number, line_number, item_description, due_date FROM orders WHERE supplier_name=?", (name,)).fetchall()
+    lines = "\n".join(
+        f"• הזמנה {o['order_number']} שורה {o['line_number']} - {o['item_description']} (יעד מקורי: {o['due_date'] or '-'})"
+        for o in rows[:10]
+    )
     greeting = sup["contact_person"] or name
     link = f"{APP_URL}/?key={sup['access_key']}"
     return (
@@ -900,9 +1063,9 @@ def render_upload_tab(conn):
     st.markdown("##### 📥 טעינת קובץ אקסל (`suppliers.xlsx`) - מנגנון VLOOKUP חכם למסד הנתונים")
     st.info(
         "💡 **איך עובד הסנכרון החכם (VLOOKUP)?**\n"
-        "• **שורות והזמנות חדשות** בקובץ האקסל מתווספות אוטומטית למסד הנתונים.\n"
-        "• **שורות קיימות** (אותו מספר הזמנה + שורה) מתעדכנות בפרטים החדשים **מבלי למחוק או לדרוס** תגובות ספקים, צפי אספקה או מענה מדור שכבר הוזנו באתר!\n"
-        "• **זיכרון אנשי קשר:** אם לספק מוכר חסר טלפון או שם איש קשר בקובץ החדש, המערכת משלימה אותם אוטומטית מהזיכרון."
+        "• **שורות והזמנות חדשות** מתווספות אוטומטית למסד הנתונים (תאריך האספקה המקורי מוגדר כברירת מחדל לצפי).\n"
+        "• **שורות קיימות** מתעדכנות בפרטים החדשים **מבלי למחוק או לדרוס** תגובות ספקים, צפי אספקה או מענה מדור שכבר הוזנו באתר!\n"
+        "• **ניקוי אוטומטי:** משפטים גנריים ישנים כמו 'כל השאר אבדוק ואעדכן' מנוקים אוטומטית כדי שהספק יזין סטטוס אמיתי."
     )
     uploaded = st.file_uploader("בחר קובץ Excel או CSV", type=["xlsx", "xls", "csv"])
     if uploaded and st.button("טען וסנכרן הזמנות למסד הנתונים (ללא מחיקת קיימים) ⚡", type="primary", use_container_width=True):
@@ -943,6 +1106,10 @@ def import_orders(conn, df):
 
         get_or_create_key(conn, supplier, contact, phone)
 
+        due_val = format_date_il(get(r, "due").split(" ")[0])
+        exp_val = format_date_il(get(r, "expected").split(" ")[0]) or due_val
+        note_val = clean_supplier_note(get(r, "note"))
+
         data = {
             "order_number": order_num,
             "line_number": get(r, "line").split(".")[0] or "10",
@@ -952,17 +1119,16 @@ def import_orders(conn, df):
             "supplier_name": supplier,
             "contact_person": contact,
             "supplier_phone": phone,
-            "due_date": get(r, "due").split(" ")[0],
+            "due_date": due_val,
             "internal_status": internal,
             "supplier_status": get(r, "status"),
-            "expected_date": get(r, "expected").split(" ")[0],
-            "supplier_note": get(r, "note"),
+            "expected_date": exp_val,
+            "supplier_note": note_val,
             "mador_response": get(r, "mador"),
             "last_updated": get(r, "updated"),
         }
         names = ", ".join(data)
         placeholders = ", ".join(f":{k}" for k in data)
-        # הגנה על תשובות קיימות במסד: אם באתר כבר הוזן סטטוס ספק / צפי / הערת ספק / מענה מדור, האקסל לא ידרוס אותם!
         protected_by_db = {"supplier_status", "expected_date", "supplier_note", "mador_response"}
         update_clauses = []
         for c in KEEP_IF_EMPTY:
@@ -985,6 +1151,9 @@ def import_orders(conn, df):
     conn.execute("""UPDATE orders SET supplier_status = COALESCE(NULLIF(internal_status, ''), 'טרם עודכן')
                     WHERE supplier_status = '' OR supplier_status IS NULL""")
 
+    conn.execute("""UPDATE orders SET expected_date = due_date
+                    WHERE (expected_date IS NULL OR TRIM(expected_date) = '') AND due_date != ''""")
+
     pending = conn.execute(
         "SELECT id, supplier_status, supplier_note, expected_date, due_date FROM orders "
         "WHERE COALESCE(mador_response, '') = '' AND needs_attention = 0").fetchall()
@@ -1002,7 +1171,7 @@ def import_orders(conn, df):
     return {"rows": rows, "contacts": contacts, "phones": phones}
 
 
-# ==================== 5ג. מסך ספק ====================
+# ==================== 5ג. מסך ספק (נעילת תאריך מקורי + החלה אוטומטית + ללא איש קשר בשורות) ====================
 def render_supplier(conn, user):
     st.markdown(f"##### 📦 ההזמנות הפתוחות של: {user['entity_name']}")
     df = query_df(conn, "SELECT * FROM orders WHERE supplier_name=?", (user["entity_name"],))
@@ -1013,9 +1182,37 @@ def render_supplier(conn, user):
         st.warning("לא נמצאו הזמנות פתוחות המשויכות אליכם כרגע.")
         return
 
+    df = enrich_delay_columns(df)
+
     if st.session_state.submitted:
         render_done_screen(df)
         return
+
+    # כלי מילוי אוטומטי מהיר לספק (במקום לכתוב "כל השאר אבדוק ואעדכן")
+    with st.expander("⚡ עדכון מהיר אוטומטי לכל השורות (לחץ כאן להחלת סטטוס או הערה גורפת על כל ההזמנות)"):
+        st.caption("רוצים לעדכן סטטוס או הערה זהה לכל השורות שלכם בלחיצה אחת? בחרו כאן והמערכת תמלא אוטומטית:")
+        b1, b2, b3 = st.columns([1.5, 2, 1])
+        bulk_st = b1.selectbox("בחר סטטוס להחלה גורפת:", ["(ללא שינוי)"] + STATUS_OPTIONS, key="bulk_st_sel")
+        bulk_nt = b2.text_input("הערה גורפת לכל השורות (אופציונלי):", placeholder="למשל: בייצור, יסופק במועד...", key="bulk_nt_inp")
+        with b3:
+            st.write("")
+            if st.button("⚡ החל על כל השורות", type="primary", use_container_width=True):
+                now = datetime.now().strftime("%d/%m/%Y %H:%M")
+                for _, r in df.iterrows():
+                    new_s = r["supplier_status"] if bulk_st == "(ללא שינוי)" else bulk_st
+                    new_n = clean_supplier_note(bulk_nt) if bulk_nt.strip() else r["supplier_note"]
+                    exp_d = r["expected_date"] or r["due_date"]
+                    flag = needs_attention(new_s, new_n, exp_d, r["due_date"])
+                    conn.execute(
+                        "UPDATE orders SET supplier_status=?, supplier_note=?, expected_date=?, needs_attention=?, last_updated=? WHERE id=?",
+                        (new_s, new_n, exp_d, int(flag), now, int(r["id"])),
+                    )
+                    # עדכון ה-Session State כדי שהשדות בטופס יתרעננו מיד
+                    st.session_state[f"st_{r['id']}"] = new_s
+                    st.session_state[f"nt_{r['id']}"] = new_n
+                conn.commit()
+                st.success("העדכון הוחל אוטומטית על כל השורות! ניתן לדייק שורות בודדות למטה וללחוץ על שמירה.")
+                st.rerun()
 
     view = st.radio("בחר אופן תצוגה:", ["📱 תצוגת כרטיסיות (לנייד)", "💻 תצוגת טבלה מרוכזת (למחשב)"], horizontal=True)
     if view.startswith("📱"):
@@ -1030,59 +1227,121 @@ def render_supplier(conn, user):
 
 
 def render_supplier_cards(df):
-    st.caption("🔒 פרטי ההזמנה ותשובות המדור נעולים. מלאו את הסטטוס והצפי לכל פריט ולחצו על כפתור השמירה בתחתית הדף.")
+    """מסך ספק בכרטיסיות: ללא איש קשר בשורה, עם פיגור בימים, ותאריך מקורי נעול עד לחיצה על 'שנה תאריך'."""
+    st.caption(
+        "🔒 **הנחיות דיווח:** תאריך האספקה המקורי מופיע כברירת מחדל ונעול. "
+        "רק אם ברצונכם לעדכן מועד אספקה שונה, סמנו את הכפתור **'📅 שנה תאריך אספקה'** באותה שורה."
+    )
     updates = []
-    with st.form("mobile_supplier_form"):
-        for _, row in df.iterrows():
-            with st.container(border=True):
-                st.markdown(f"""
-                <div class="order-card-header">
-                    <strong>🔒 הזמנה: {row['order_number']} | שורה: {row['line_number']}</strong><br>
-                    <span>{row['item_description'] or 'ללא תיאור'}</span>
-                </div>
-                <div>
-                    <span class="locked-badge">🔒 מק"ט: {row['part_number'] or '-'}</span>
-                    <span class="locked-badge">🔒 יעד: {row['due_date'] or '-'}</span>
-                    <span class="locked-badge">👤 איש קשר: {row['contact_person'] or '-'}</span>
-                </div>""", unsafe_allow_html=True)
+    for _, row in df.iterrows():
+        oid = int(row["id"])
+        orig_due_str = format_date_il(row["due_date"])
+        orig_due_date = parse_date(row["due_date"])
+        saved_exp_str = clean_str(row["expected_date"])
+        saved_exp_date = parse_date(saved_exp_str)
 
-                if row["mador_response"]:
-                    st.info(f"💬 **מענה מדור חט\"ל (נעול):** {row['mador_response']}")
+        with st.container(border=True):
+            delay_cls = "delay-badge-red" if (row["delay_days_num"] or 0) > 0 else "delay-badge-green"
+            st.markdown(f"""
+            <div class="order-card-header">
+                <strong>🔒 הזמנה: {row['order_number']} | שורה: {row['line_number']}</strong><br>
+                <span>{row['item_description'] or 'ללא תיאור'}</span>
+            </div>
+            <div>
+                <span class="locked-badge">🔒 מק"ט: {row['part_number'] or '-'}</span>
+                <span class="locked-badge">🔒 תאריך אספקה מקורי: {orig_due_str or '-'}</span>
+                <span class="{delay_cls}">⏳ {row['delay_days_display']}</span>
+            </div>""", unsafe_allow_html=True)
 
-                current = row["supplier_status"] if row["supplier_status"] in STATUS_OPTIONS else STATUS_OPTIONS[0]
-                status = st.selectbox("✍️ סטטוס עדכני:", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current), key=f"st_{row['id']}")
-                c1, c2 = st.columns([3, 2])
-                eta_date = c1.date_input(
-                    "📅 צפי אספקה (בחרו מהלוח):", value=parse_date(row["expected_date"]),
-                    format="DD/MM/YYYY", key=f"eta_{row['id']}")
-                no_eta = c2.checkbox("❓ אין צפי עדיין", value=clean_str(row["expected_date"]) == NO_ETA, key=f"noeta_{row['id']}")
-                expected = encode_eta(eta_date, no_eta)
-                note = st.text_input("✍️ תגובת ספק / בקשה למדור:", value=row["supplier_note"], placeholder="פרט סיבת עיכוב או בקשה...", key=f"nt_{row['id']}")
-                updates.append((row["id"], status, expected, note))
+            if row["mador_response"]:
+                st.info(f"💬 **מענה מדור חט\"ל (נעול):** {row['mador_response']}")
 
-        sent = st.form_submit_button('✅ שמור ושלח את כל העדכונים לחט"ל', type="primary", use_container_width=True)
-    return updates if sent else None
+            current_st = row["supplier_status"] if row["supplier_status"] in STATUS_OPTIONS else STATUS_OPTIONS[0]
+            status = st.selectbox(
+                "✍️ סטטוס עדכני:",
+                STATUS_OPTIONS,
+                index=STATUS_OPTIONS.index(current_st),
+                key=f"st_{oid}",
+            )
+
+            # בדיקה אם הספק כבר שינה בעבר את התאריך מתאריך המקור
+            already_changed = bool(
+                saved_exp_date and orig_due_date and saved_exp_date != orig_due_date
+            )
+            c_btn1, c_btn2, c_date = st.columns([1.4, 1.2, 2.2])
+            with c_btn1:
+                change_date = st.checkbox("📅 שנה תאריך אספקה", value=already_changed, key=f"chg_{oid}")
+            with c_btn2:
+                no_eta = st.checkbox("❓ אין צפי עדיין", value=(saved_exp_str == NO_ETA), key=f"noeta_{oid}")
+
+            default_picker_date = saved_exp_date or orig_due_date or date.today()
+            with c_date:
+                eta_date = st.date_input(
+                    "📅 תאריך אספקה בתגובת ספק (נעול לתאריך המקורי עד לחיצה על 'שנה תאריך'):",
+                    value=default_picker_date,
+                    format="DD/MM/YYYY",
+                    disabled=(not change_date or no_eta),
+                    key=f"eta_{oid}",
+                )
+
+            if no_eta:
+                expected = NO_ETA
+            elif change_date:
+                expected = encode_eta(eta_date, False, orig_due_str)
+            else:
+                expected = orig_due_str or encode_eta(default_picker_date, False, "")
+
+            note_val = clean_supplier_note(row["supplier_note"])
+            note = st.text_input(
+                "✍️ תגובת ספק / פירוט סיבה למדור:",
+                value=note_val,
+                placeholder="הקלד כאן תגובה מפורטת או בקשה למדור...",
+                key=f"nt_{oid}",
+            )
+            updates.append((oid, status, expected, note))
+
+    if st.button('✅ שמור ושלח את כל העדכונים לחט"ל', type="primary", use_container_width=True):
+        return updates
+    return None
 
 
 def render_supplier_table(df):
-    st.caption("🔒 פרטי ההזמנה ותשובות המדור נעולים לשינוי.")
+    st.caption(
+        "🔒 **הנחיות טבלה:** תאריך האספקה המקורי מוצג כברירת מחדל. "
+        "כדי לשנות תאריך אספקה בשורה מסוימת, סמן V בעמודת **'📅 שנה תאריך'** ובחר את התאריך החדש."
+    )
     df = df.copy()
     df["supplier_status"] = df["supplier_status"].apply(lambda x: x if x in STATUS_OPTIONS else STATUS_OPTIONS[0])
-    df["eta_date"] = df["expected_date"].apply(parse_date)
+    df["orig_due_str"] = df["due_date"].apply(format_date_il)
+    df["eta_date"] = [
+        parse_date(r["expected_date"]) or parse_date(r["due_date"]) or date.today()
+        for _, r in df.iterrows()
+    ]
+    df["change_date"] = [
+        bool(parse_date(r["expected_date"]) and parse_date(r["due_date"]) and parse_date(r["expected_date"]) != parse_date(r["due_date"]))
+        for _, r in df.iterrows()
+    ]
     df["no_eta"] = df["expected_date"].apply(lambda x: clean_str(x) == NO_ETA)
+    df["supplier_note"] = df["supplier_note"].apply(clean_supplier_note)
+
     T = st.column_config.TextColumn
     edited = st.data_editor(
-        df[["id", "order_number", "line_number", "part_number", "item_description", "due_date",
-            "supplier_status", "eta_date", "no_eta", "supplier_note", "mador_response"]],
+        df[[
+            "id", "order_number", "line_number", "part_number", "item_description",
+            "orig_due_str", "delay_days_display", "supplier_status",
+            "change_date", "eta_date", "no_eta", "supplier_note", "mador_response",
+        ]],
         column_config={
             "id": None,
             "order_number": T("🔒 מס' הזמנה", disabled=True),
             "line_number": T("🔒 שורה", disabled=True),
             "part_number": T('🔒 מק"ט', disabled=True),
             "item_description": T("🔒 שם פריט", disabled=True),
-            "due_date": T("🔒 תאריך אספקה", disabled=True),
+            "orig_due_str": T("🔒 תאריך מקורי", disabled=True),
+            "delay_days_display": T("⏳ פיגור בימים", disabled=True),
             "supplier_status": st.column_config.SelectboxColumn("✍️ סטטוס עדכני", options=STATUS_OPTIONS, required=True),
-            "eta_date": st.column_config.DateColumn("📅 צפי אספקה", format="DD/MM/YYYY"),
+            "change_date": st.column_config.CheckboxColumn("📅 שנה תאריך"),
+            "eta_date": st.column_config.DateColumn("📅 תאריך בתגובת ספק", format="DD/MM/YYYY"),
             "no_eta": st.column_config.CheckboxColumn("❓ אין צפי"),
             "supplier_note": T("✍️ תגובת ספק"),
             "mador_response": T('🔒 מענה מדור חט"ל', disabled=True),
@@ -1090,8 +1349,16 @@ def render_supplier_table(df):
         use_container_width=True, hide_index=True,
     )
     if st.button('✅ שמור ושלח עדכונים לחט"ל', type="primary", use_container_width=True):
-        return [(r["id"], r["supplier_status"], encode_eta(r["eta_date"], r["no_eta"]), r["supplier_note"])
-                for _, r in edited.iterrows()]
+        results = []
+        for _, r in edited.iterrows():
+            if r["no_eta"]:
+                exp = NO_ETA
+            elif r["change_date"]:
+                exp = encode_eta(r["eta_date"], False, r["orig_due_str"])
+            else:
+                exp = r["orig_due_str"]
+            results.append((r["id"], r["supplier_status"], exp, r["supplier_note"]))
+        return results
     return None
 
 
@@ -1102,11 +1369,21 @@ def render_done_screen(df):
         st.caption(f"עודכן לאחרונה: {last.iloc[-1]}")
 
     st.markdown("##### סיכום העדכונים ששלחתם")
-    summary = df[["order_number", "line_number", "item_description", "supplier_status", "expected_date", "supplier_note", "mador_response"]]
+    summary = df[[
+        "order_number", "line_number", "item_description", "due_date",
+        "delay_days_display", "supplier_status", "expected_date", "supplier_note", "mador_response",
+    ]]
     st.dataframe(
         summary.rename(columns={
-            "order_number": "הזמנה", "line_number": "שורה", "item_description": "פריט",
-            "supplier_status": "סטטוס", "expected_date": "צפי", "supplier_note": "הערתכם", "mador_response": 'מענה חט"ל',
+            "order_number": "הזמנה",
+            "line_number": "שורה",
+            "item_description": "פריט",
+            "due_date": "תאריך מקורי",
+            "delay_days_display": "פיגור בימים",
+            "supplier_status": "סטטוס",
+            "expected_date": "צפי ספק",
+            "supplier_note": "הערתכם",
+            "mador_response": 'מענה חט"ל',
         }),
         use_container_width=True, hide_index=True,
     )
@@ -1131,7 +1408,7 @@ def run_app(conn):
         st.stop()
 
     user = st.session_state.user
-    render_top_bar(user)
+    render_top_bar(conn, user)
     if user["role"] in ("admin", "mador"):
         render_staff(conn, user)
     else:
