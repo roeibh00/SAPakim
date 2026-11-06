@@ -1,13 +1,18 @@
-"""SAPakim - פורטל הזמנות ספקים ושו"ב ארגוני (Streamlit + Neon PostgreSQL / SQLite)
-
-מבנה הקובץ:
-  1. קונפיגורציה וקבועים
-  2. עיצוב רשמי ויישור לימין (ללא פגיעה בחישוב רוחב העמודות בטבלה)
-  3. מסד נתונים (Neon PostgreSQL קבוע / SQLite מקומי)
-  4. פונקציות עזר, ניקוי מספרים וחישוב ימי פיגור אוטומטי
-  5. מסכים: כניסה / מנהל ומדורים / ספק
-  6. main()
 """
+================================================================================
+SAPakim - מערכת שו"ב ארגונית לבקרת הזמנות, מדורים ותקשורת ספקים (חט"ל / צה"ל)
+================================================================================
+ארכיטקטורת הקובץ (מותאם לתחזוקה והעברה למתכנתים):
+  פרק 1: הגדרות מערכת, קבועים והרשאות צוות (Configuration & Constants)
+  פרק 2: שכבת עיצוב ותצוגה רשמית מיושרת לימין (RTL UI & CSS Layer)
+  פרק 3: שכבת מסד הנתונים - Neon PostgreSQL / SQLite (Database Abstraction Layer)
+  פרק 4: מנוע אבטחה, יומן אירועים, אימות ספקים ואיפוס סיסמאות (Security & Audit Layer)
+  פרק 5: לוגיקה עסקית, VLOOKUP חכם, חישוב פיגורים וסטטוס שבועי (Business Logic Layer)
+  פרק 6: תצוגות מערכת לפי תפקיד - כניסה / מנהל ומדורים / פורטל ספק (Presentation Layer)
+  פרק 7: נקודת כניסה ראשית של האפליקציה (Main Entry Point)
+================================================================================
+"""
+
 import json
 import re
 import secrets
@@ -21,20 +26,28 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="SAPakim - מערכת שו\"ב הזמנות וספקים",
+    page_title='SAPakim - מערכת שו"ב הזמנות וספקים',
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# ==================== 1. קונפיגורציה וקבועים ====================
+
+# ==============================================================================
+# פרק 1: הגדרות מערכת, קבועים והרשאות צוות (Configuration & Constants)
+# ==============================================================================
 DB_PATH = "sapakim_cloud.db"
 APP_URL = "https://sapakim-kukmcxaux8yf9tfjrygif9.streamlit.app"
 MAX_LOGIN_ATTEMPTS = 5
 DONE_STATUS = "סופק"
 NO_ETA = "אין צפי"
 DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d.%m.%Y", "%d-%m-%Y", "%d/%m/%y")
+DATETIME_FORMATS = ("%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y")
 
+# אפשרויות עבור עמודת "מנהל ההזמנה" (שיוך למדור)
+MANAGER_OPTIONS = ['נמ"ר', "מרכבה", "איתן", 'מנה"ר', "כללי"]
+
+# אפשרויות סטטוס ספק מובנות
 STATUS_OPTIONS = [
     "טרם עודכן",
     "תקין - בייצור",
@@ -55,23 +68,28 @@ OBSOLETE_NOTES = (
     "כל השאר סופק",
 )
 
+# מפתחות צוות: (מפתח גישה, תפקיד, שם תצוגה, שיוך למנהל ההזמנה)
+# שיוך 'ALL' עבור מנהל מערכת רואה הכל; שיוך ספציפי ממדר אוטומטית את ההזמנות למדור!
 STAFF_KEYS = [
-    ("BH-ADMIN-9920", "admin", "רועי - מנהל מערכת ראשי"),
-    ("NAMER-7741", "mador", 'מדור נמ"ר'),
-    ("MERKAVA-5582", "mador", "מדור מרכבה"),
-    ("MANHAR-3319", "mador", 'מנה"ר רכש'),
+    ("BH-ADMIN-9920", "admin", "רועי - מנהל מערכת ראשי", "ALL"),
+    ("NAMER-7741", "mador", 'מדור נמ"ר', 'נמ"ר'),
+    ("MERKAVA-5582", "mador", "מדור מרכבה", "מרכבה"),
+    ("EITAN-6614", "mador", "מדור איתן", "איתן"),
+    ("MANHAR-3319", "mador", 'מנה"ר רכש', 'מנה"ר'),
 ]
 
+# מיפוי שמות עמודות גמיש לקליטת קובצי אקסל
 EXCEL_ALIASES = {
     "order": ["מספר הזמנה", "הזמנה"],
     "line": ["שורה", "מספר שורה"],
+    "manager": ["מנהל ההזמנה", "מנהל הזמנה", "מדור", "פרויקט", "רק\"מ", "רקמ"],
     "supplier": ["חברה", "שם ספק", "ספק"],
     "contact": ["איש קשר", "איש_קשר", "נציג"],
     "phone": ["מספר טלפון", "טלפון", "פרטי התקשרות", "נייד"],
     "part": ['מק"ט', "מקט"],
     "desc": ["שם פריט", "פרט", "תיאור"],
     "qty": ["כמה הוזמנו", "כמות"],
-    "due": ["תאריך אספקה", "אספקה"],
+    "due": ["תאריך אספקה מקורי", "תאריך אספקה", "אספקה"],
     "internal": ["סטטוס אחרון"],
     "expected": ["צפי ספק", "צפי_אספקה_מעודכן"],
     "status": ["סטטוס עדכני"],
@@ -81,17 +99,20 @@ EXCEL_ALIASES = {
 }
 
 KEEP_IF_EMPTY = [
-    "part_number", "item_description", "contact_person", "supplier_phone", "due_date",
-    "internal_status", "supplier_status", "expected_date", "supplier_note", "mador_response",
+    "order_manager", "part_number", "item_description", "contact_person",
+    "supplier_phone", "due_date", "internal_status", "supplier_status",
+    "expected_date", "supplier_note", "mador_response",
 ]
 
 EXPORT_MAP = {
     "מספר הזמנה": "order_number",
     "שורה": "line_number",
+    "מנהל ההזמנה": "order_manager",
     "שם פריט": "item_description",
     'מק"ט': "part_number",
     "תאריך אספקה מקורי": "due_date",
     "פיגור בימים": "delay_days_display",
+    "סטטוס שבועי": "weekly_status_display",
     "חברה": "supplier_name",
     "סטטוס אחרון": "internal_status",
     "איש קשר": "contact_person",
@@ -103,7 +124,10 @@ EXPORT_MAP = {
     "תאריך_עדכון_אחרון": "last_updated",
 }
 
-# ==================== 2. עיצוב רשמי ויישור לימין (ללא חיתוך עמודות בטבלה) ====================
+
+# ==============================================================================
+# פרק 2: שכבת עיצוב ותצוגה רשמית מיושרת לימין (RTL UI & CSS Layer)
+# ==============================================================================
 CSS = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap');
@@ -123,11 +147,10 @@ CSS = """
         height: 3.2rem !important; z-index: 999 !important;
     }
     .block-container {
-        max-width: 1380px !important; margin: 0 auto !important;
+        max-width: 1420px !important; margin: 0 auto !important;
         padding-top: 4.2rem !important; padding-bottom: 3rem !important;
     }
 
-    /* יישור לימין של אלמנטי טקסט בדף מבלי לשבש את ה-Canvas הפנימי של טבלת הנתונים */
     .stMarkdown, .stText, .stCaption, [data-testid="stMarkdownContainer"] p,
     h1, h2, h3, h4, h5, h6 {
         color: #0f172a;
@@ -157,12 +180,12 @@ CSS = """
         direction: rtl !important; text-align: right !important;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 1.5rem !important; font-weight: 700 !important;
+        font-size: 1.45rem !important; font-weight: 700 !important;
         color: #0f172a !important;
         direction: rtl !important; text-align: right !important;
     }
     div[data-testid="stMetricLabel"] p {
-        font-size: 0.85rem !important; font-weight: 600 !important; color: #475569 !important;
+        font-size: 0.84rem !important; font-weight: 600 !important; color: #475569 !important;
         direction: rtl !important; text-align: right !important;
     }
 
@@ -193,30 +216,12 @@ CSS = """
     }
     [role="option"], [role="option"] * { min-height: 44px; }
 
-    [data-testid="stDateInputField"] {
+    [data-testid="stDateInputField"], [data-testid="stDateInputCalendar"] {
         background-color: #ffffff !important; border: 1px solid #cbd5e1 !important; color-scheme: light !important;
     }
-    [data-testid="stDateInputField"] * {
+    [data-testid="stDateInputField"] *, [data-testid="stDateInputCalendar"] * {
         color: #0f172a !important; -webkit-text-fill-color: #0f172a !important;
-        font-family: 'Rubik', sans-serif !important; font-size: 16px !important;
-    }
-
-    [data-testid="stDateInputCalendar"] {
-        background-color: #ffffff !important; color-scheme: light !important;
-        border: 1px solid #cbd5e1 !important; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18) !important;
-    }
-    [data-testid="stDateInputCalendar"] * {
-        color: #0f172a !important; -webkit-text-fill-color: #0f172a !important;
-        opacity: 1 !important; font-family: 'Rubik', sans-serif !important;
-    }
-    [data-testid="stDateInputCalendar"] [aria-disabled="true"],
-    [data-testid="stDateInputCalendar"] [data-outside-month="true"] {
-        color: #94a3b8 !important; -webkit-text-fill-color: #94a3b8 !important;
-    }
-    [data-testid="stDateInputCalendar"] [role="button"]:hover { background-color: #fef3c7 !important; }
-    [data-testid="stDateInputCalendar"] [data-selected="true"], [data-testid="stDateInputCalendar"] [aria-selected="true"] [role="button"],
-    [data-testid="stDateInputCalendar"] [data-selected="true"] * {
-        background-color: #d97706 !important; color: #ffffff !important; -webkit-text-fill-color: #ffffff !important;
+        font-family: 'Rubik', sans-serif !important;
     }
 
     .order-card-header {
@@ -268,7 +273,9 @@ CSS = """
 st.markdown(CSS, unsafe_allow_html=True)
 
 
-# ==================== 3. מסד נתונים (Neon PostgreSQL / SQLite) ====================
+# ==============================================================================
+# פרק 3: שכבת מסד הנתונים - Neon PostgreSQL / SQLite (Database Layer)
+# ==============================================================================
 def _read_database_url():
     try:
         url = str(st.secrets.get("DATABASE_URL", "")).strip()
@@ -295,7 +302,7 @@ def _py(value):
 
 
 class Db:
-    """עוטף אחיד ל-SQLite ול-Neon Postgres."""
+    """מחלקת עטיפה אחידה ל-Neon PostgreSQL ול-SQLite."""
 
     def __init__(self):
         if USE_PG:
@@ -336,6 +343,7 @@ def query_df(conn, sql, params=()):
 
 @st.cache_resource
 def init_db():
+    """מאתחל את כלל הטבלאות, מבצע מיגרציות אוטומטיות לעמודות חדשות ומזריק מפתחות צוות."""
     conn = get_db()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS access_keys (
@@ -344,6 +352,10 @@ def init_db():
             entity_name TEXT NOT NULL,
             contact_person TEXT DEFAULT '',
             phone TEXT DEFAULT '',
+            custom_password TEXT DEFAULT '',
+            assigned_manager TEXT DEFAULT 'ALL',
+            is_locked INTEGER DEFAULT 0,
+            last_pwd_change TEXT DEFAULT '',
             UNIQUE(role, entity_name)
         )''')
     conn.execute(f'''
@@ -351,6 +363,7 @@ def init_db():
             id {PK_DEF},
             order_number TEXT NOT NULL,
             line_number TEXT NOT NULL,
+            order_manager TEXT DEFAULT 'נמ"ר',
             part_number TEXT DEFAULT '',
             item_description TEXT DEFAULT '',
             quantity TEXT DEFAULT '1',
@@ -368,18 +381,36 @@ def init_db():
             last_updated TEXT DEFAULT '',
             UNIQUE(order_number, line_number)
         )''')
+    conn.execute(f'''
+        CREATE TABLE IF NOT EXISTS security_logs (
+            id {PK_DEF},
+            event_time TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            actor_name TEXT NOT NULL,
+            details TEXT NOT NULL,
+            new_credential TEXT DEFAULT '',
+            is_read INTEGER DEFAULT 0
+        )''')
     conn.commit()
 
-    if not USE_PG:
-        for sql in [
-            "ALTER TABLE orders ADD COLUMN contact_person TEXT DEFAULT ''",
-            "ALTER TABLE orders ADD COLUMN internal_status TEXT DEFAULT ''",
-            "ALTER TABLE access_keys ADD COLUMN contact_person TEXT DEFAULT ''",
-        ]:
-            try:
-                conn.execute(sql)
-            except sqlite3.OperationalError:
-                pass
+    # מיגרציות בטוחות לעמודות חדשות (עובד גם על Neon PostgreSQL וגם על SQLite)
+    migrations = [
+        "ALTER TABLE orders ADD COLUMN contact_person TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN internal_status TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN order_manager TEXT DEFAULT 'נמ\"ר'",
+        "ALTER TABLE access_keys ADD COLUMN contact_person TEXT DEFAULT ''",
+        "ALTER TABLE access_keys ADD COLUMN custom_password TEXT DEFAULT ''",
+        "ALTER TABLE access_keys ADD COLUMN assigned_manager TEXT DEFAULT 'ALL'",
+        "ALTER TABLE access_keys ADD COLUMN is_locked INTEGER DEFAULT 0",
+        "ALTER TABLE access_keys ADD COLUMN last_pwd_change TEXT DEFAULT ''",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            if USE_PG:
+                conn.raw.rollback()
 
     for obs in OBSOLETE_NOTES:
         conn.execute("UPDATE orders SET supplier_note='' WHERE TRIM(supplier_note)=?", (obs,))
@@ -390,8 +421,13 @@ def init_db():
         WHERE (expected_date IS NULL OR TRIM(expected_date) = '')
           AND due_date IS NOT NULL AND TRIM(due_date) != ''
     """)
+    conn.execute("""
+        UPDATE orders
+        SET order_manager = 'נמ"ר'
+        WHERE order_manager IS NULL OR TRIM(order_manager) = ''
+    """)
 
-    # תיקון אוטומטי למספרי טלפון קיימים במסד שחסר להם 0 בהתחלה (למשל 546966537 -> 0546966537)
+    # תיקון פורמט מספרים קיימים במסד
     rows_p = conn.execute("SELECT id, supplier_phone, part_number, order_number, line_number FROM orders").fetchall()
     for rp in rows_p:
         fixed_p = clean_display_phone(rp["supplier_phone"])
@@ -405,30 +441,112 @@ def init_db():
                 (fixed_p, fixed_part, fixed_ord, fixed_line, rp["id"]),
             )
 
-    # השלמה רוחבית של מספרי טלפון ואנשי קשר בין שורות של אותו ספק
-    conn.execute("""
-        UPDATE orders
-        SET supplier_phone = (
-            SELECT phone FROM access_keys
-            WHERE access_keys.entity_name = orders.supplier_name AND access_keys.role='supplier'
-        )
-        WHERE (supplier_phone IS NULL OR supplier_phone = '')
-    """)
-    conn.execute("""
-        UPDATE orders
-        SET contact_person = (
-            SELECT contact_person FROM access_keys
-            WHERE access_keys.entity_name = orders.supplier_name AND access_keys.role='supplier'
-        )
-        WHERE (contact_person IS NULL OR contact_person = '')
-    """)
-
     conn.execute("DELETE FROM access_keys WHERE role IN ('admin', 'mador')")
-    for key, role, name in STAFF_KEYS:
-        conn.execute("INSERT INTO access_keys (access_key, role, entity_name) VALUES (?, ?, ?)", (key, role, name))
+    for key, role, name, mgr in STAFF_KEYS:
+        conn.execute(
+            "INSERT INTO access_keys (access_key, role, entity_name, assigned_manager) VALUES (?, ?, ?, ?)",
+            (key, role, name, mgr),
+        )
     conn.commit()
     conn.close()
     return True
+
+
+# ==============================================================================
+# פרק 4: מנוע אבטחה, יומן אירועים, אימות ספקים ואיפוס סיסמאות (Security Layer)
+# ==============================================================================
+def log_security_event(conn, event_type, actor_name, details, new_credential=""):
+    """מתעד אירוע אבטחה / שינוי סיסמה / עריכת מנהל בטבלת הבקרה."""
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    conn.execute(
+        """INSERT INTO security_logs (event_time, event_type, actor_name, details, new_credential, is_read)
+           VALUES (?, ?, ?, ?, ?, 0)""",
+        (now, event_type, actor_name, details, new_credential),
+    )
+    conn.commit()
+
+
+def authenticate_user(conn, key_or_pwd):
+    """מאמת משתמש לפי מפתח גישה ראשי או לפי סיסמה אישית שהספק הגדיר."""
+    clean_k = clean_str(key_or_pwd)
+    if not clean_k:
+        return None, "נא להזין מפתח גישה או סיסמה."
+    row = conn.execute(
+        "SELECT * FROM access_keys WHERE UPPER(access_key)=? OR (custom_password != '' AND custom_password=?)",
+        (clean_k.upper(), clean_k),
+    ).fetchone()
+    if not row:
+        return None, "מפתח גישה או סיסמה שגויים."
+    if int(row.get("is_locked") or 0) == 1:
+        return None, "⛔ גישת ספק זה ננעלה על ידי מנהל המערכת. אנא פנה לחט\"ל."
+    return dict(row), ""
+
+
+def verify_supplier_pin(conn, supplier_user, pin_input):
+    """
+    אימות דו-שלבי (2FA) לקישור ספק למניעת דליפת מידע:
+    מוודא שמי שלחץ על הקישור הוא אכן איש הקשר של הספק (4 ספרות אחרונות של הטלפון שלו או סיסמת הספק).
+    """
+    pin = clean_str(pin_input)
+    if not pin:
+        return False
+
+    # בדיקה מול סיסמה אישית או מפתח גישה
+    if pin.upper() == supplier_user["access_key"].upper():
+        return True
+    if supplier_user.get("custom_password") and pin == supplier_user["custom_password"]:
+        return True
+
+    # שליפת מספר הטלפון של איש הקשר
+    phone = clean_display_phone(supplier_user.get("phone", ""))
+    if not phone:
+        r_p = conn.execute(
+            "SELECT supplier_phone FROM orders WHERE supplier_name=? AND supplier_phone != '' LIMIT 1",
+            (supplier_user["entity_name"],),
+        ).fetchone()
+        if r_p:
+            phone = clean_display_phone(r_p["supplier_phone"])
+
+    # אם לספק יש טלפון תקין במערכת - נבדוק התאמה ל-4 הספרות האחרונות (או למספר המלא)
+    if phone and len(phone) >= 4:
+        if pin == phone[-4:] or clean_display_phone(pin) == phone:
+            return True
+    return False
+
+
+def update_supplier_password(conn, entity_name, new_password, changed_by="ספק"):
+    """מעדכן סיסמה חדשה לספק ושולח התראה מיידית למנהל המערכת."""
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    conn.execute(
+        "UPDATE access_keys SET custom_password=?, last_pwd_change=? WHERE role='supplier' AND entity_name=?",
+        (new_password, now, entity_name),
+    )
+    conn.commit()
+    log_security_event(
+        conn,
+        event_type="החלפת סיסמת ספק",
+        actor_name=entity_name,
+        details=f"הספק '{entity_name}' החליף סיסמה ({changed_by}).",
+        new_credential=new_password,
+    )
+
+
+def regenerate_supplier_key(conn, entity_name, admin_name):
+    """מייצר מפתח קישור חדש לספק (מבטל קישור קודם במקרה של חשש לדליפה)."""
+    new_key = f"SUP-{secrets.token_hex(3).upper()}"
+    conn.execute(
+        "UPDATE access_keys SET access_key=? WHERE role='supplier' AND entity_name=?",
+        (new_key, entity_name),
+    )
+    conn.commit()
+    log_security_event(
+        conn,
+        event_type="איפוס קישור ספק",
+        actor_name=admin_name,
+        details=f"מפתח הקישור של '{entity_name}' הוחלף למניעת דליפת מידע.",
+        new_credential=new_key,
+    )
+    return new_key
 
 
 def get_or_create_key(conn, entity_name, contact_person="", phone=""):
@@ -455,29 +573,9 @@ def get_or_create_key(conn, entity_name, contact_person="", phone=""):
     return new_key
 
 
-def save_supplier_updates(conn, supplier_name, updates):
-    now = datetime.now().strftime("%d/%m/%Y %H:%M")
-    due_by_id = {int(r["id"]): r["due_date"] for r in
-                 conn.execute("SELECT id, due_date FROM orders WHERE supplier_name=?", (supplier_name,)).fetchall()}
-    for order_id, status, expected, note in updates:
-        clean_nt = clean_supplier_note(note)
-        flag = needs_attention(status, clean_nt, expected, due_by_id.get(int(order_id), ""))
-        conn.execute(
-            """UPDATE orders
-               SET supplier_status=?, expected_date=?, supplier_note=?, needs_attention=?, last_updated=?
-               WHERE id=? AND supplier_name=?""",
-            (status, expected, clean_nt, int(flag), now, int(order_id), supplier_name),
-        )
-    conn.commit()
-
-
-def delete_orders_by_ids(conn, order_ids):
-    for oid in order_ids:
-        conn.execute("DELETE FROM orders WHERE id=?", (int(oid),))
-    conn.commit()
-
-
-# ==================== 4. פונקציות עזר, ניקוי מספרים וחישוב פיגור בימים ====================
+# ==============================================================================
+# פרק 5: לוגיקה עסקית, VLOOKUP, חישוב פיגורים וסטטוס שבועי (Business Logic)
+# ==============================================================================
 def clean_str(val):
     if val is None or pd.isna(val):
         return ""
@@ -486,7 +584,6 @@ def clean_str(val):
 
 
 def clean_id_num(val):
-    """מנקה מספרי הזמנה ומספרי שורה (מונע .0 או כתיב מדעי כמו 4.44E+09 מאקסל)."""
     if val is None or pd.isna(val):
         return ""
     if isinstance(val, (int, float)) and not isinstance(val, bool):
@@ -506,7 +603,6 @@ def clean_id_num(val):
 
 
 def clean_part_num(val):
-    """מנקה מק"טים ומשלים 0 מוביל אם אקסל מחק אותו ממק"ט בן 8 ספרות שמתחיל ב-4."""
     p = clean_id_num(val)
     if len(p) == 8 and p.startswith("4") and p.isdigit():
         return "0" + p
@@ -521,6 +617,21 @@ def clean_supplier_note(val):
     return s
 
 
+def normalize_manager(raw_manager, item_desc=""):
+    """מנרמל את שיוך 'מנהל ההזמנה' (נמ"ר / מרכבה / איתן / מנה"ר) מהאקסל או מתיאור הפריט."""
+    txt = f"{clean_str(raw_manager)} {clean_str(item_desc)}"
+    if "מרכבה" in txt:
+        return "מרכבה"
+    if "איתן" in txt:
+        return "איתן"
+    if "מנה\"ר" in txt or "מנהר" in txt:
+        return 'מנה"ר'
+    if "נמר" in txt or 'נמ"ר' in txt:
+        return 'נמ"ר'
+    clean_m = clean_str(raw_manager)
+    return clean_m if clean_m in MANAGER_OPTIONS else 'נמ"ר'
+
+
 def find_col(columns, candidates):
     for cand in candidates:
         for col in columns:
@@ -530,7 +641,6 @@ def find_col(columns, candidates):
 
 
 def clean_display_phone(raw):
-    """מנקה מספרי טלפון (ניידים ונייחים), מסיר .0 ומוסיף 0 מוביל אם אקסל מחק אותו."""
     s = clean_id_num(raw)
     if not s:
         s = clean_str(raw).split(".")[0]
@@ -590,21 +700,46 @@ def format_delay_days(due_str, status=""):
     return f"🟢 עוד {abs(diff)} ימים"
 
 
-def enrich_delay_columns(df):
+def calc_weekly_status(last_updated_str, status=""):
+    """מחשב חיווי עדכון שבועי (האם הספק עדכן ב-7 הימים האחרונים)."""
+    if str(status or "").strip() == DONE_STATUS:
+        return "✅ הושלם"
+    txt = clean_str(last_updated_str)
+    if not txt:
+        return "⚪ טרם עודכן"
+    upd_date = parse_date(txt)
+    if not upd_date:
+        return "⚪ טרם עודכן"
+    days_ago = (date.today() - upd_date).days
+    if days_ago <= 7:
+        return "🟢 עודכן השבוע"
+    return f"🟠 לפני {days_ago} ימים"
+
+
+def enrich_orders_df(df):
+    """מוסיף עמודות מחושבות: ניקוי מספרים, פיגור בימים וסטטוס עדכון שבועי."""
     df = df.copy()
     if df.empty:
         df["delay_days_num"] = []
         df["delay_days_display"] = []
+        df["weekly_status_display"] = []
         return df
     df["order_number"] = df["order_number"].apply(clean_id_num)
     df["line_number"] = df["line_number"].apply(lambda x: clean_id_num(x) or "10")
     df["part_number"] = df["part_number"].apply(clean_part_num)
     df["supplier_phone"] = df["supplier_phone"].apply(clean_display_phone)
+    df["order_manager"] = [
+        normalize_manager(r.get("order_manager", ""), r.get("item_description", ""))
+        for _, r in df.iterrows()
+    ]
     df["delay_days_num"] = [
         calc_delay_days_int(r["due_date"], r["supplier_status"]) for _, r in df.iterrows()
     ]
     df["delay_days_display"] = [
         format_delay_days(r["due_date"], r["supplier_status"]) for _, r in df.iterrows()
+    ]
+    df["weekly_status_display"] = [
+        calc_weekly_status(r["last_updated"], r["supplier_status"]) for _, r in df.iterrows()
     ]
     return df
 
@@ -642,41 +777,148 @@ def not_done(series):
     return ~series.astype(str).str.strip().eq(DONE_STATUS)
 
 
-# ==================== 5א. מסך כניסה ====================
+def save_supplier_updates(conn, supplier_name, updates):
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    due_by_id = {int(r["id"]): r["due_date"] for r in
+                 conn.execute("SELECT id, due_date FROM orders WHERE supplier_name=?", (supplier_name,)).fetchall()}
+    for order_id, status, expected, note in updates:
+        clean_nt = clean_supplier_note(note)
+        flag = needs_attention(status, clean_nt, expected, due_by_id.get(int(order_id), ""))
+        conn.execute(
+            """UPDATE orders
+               SET supplier_status=?, expected_date=?, supplier_note=?, needs_attention=?, last_updated=?
+               WHERE id=? AND supplier_name=?""",
+            (status, expected, clean_nt, int(flag), now, int(order_id), supplier_name),
+        )
+    conn.commit()
+    log_security_event(conn, "עדכון סטטוס ספק", supplier_name, f"הספק עדכן {len(updates)} שורות הזמנה.")
+
+
+def delete_orders_by_ids(conn, order_ids, actor_name="מנהל מערכת"):
+    for oid in order_ids:
+        conn.execute("DELETE FROM orders WHERE id=?", (int(oid),))
+    conn.commit()
+    log_security_event(conn, "מחיקת הזמנות", actor_name, f"נמחקו {len(order_ids)} שורות הזמנה ממסד הנתונים.")
+
+
+def export_full_backup_excel(conn):
+    """מייצא גיבוי מערכת מלא ל-Excel עם 3 גיליונות: הזמנות, מפתחות ספקים ויומן אבטחה."""
+    df_ord = enrich_orders_df(query_df(conn, "SELECT * FROM orders ORDER BY supplier_name, order_number"))
+    export_orders = pd.DataFrame({heb: df_ord[col] for heb, col in EXPORT_MAP.items()}) if not df_ord.empty else pd.DataFrame()
+    df_keys = query_df(conn, "SELECT access_key, role, entity_name, contact_person, phone, custom_password, assigned_manager, is_locked, last_pwd_change FROM access_keys")
+    df_logs = query_df(conn, "SELECT event_time, event_type, actor_name, details, new_credential FROM security_logs ORDER BY id DESC")
+
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        export_orders.to_excel(writer, index=False, sheet_name="הזמנות_ומעקב")
+        df_keys.to_excel(writer, index=False, sheet_name="ספקים_וסיסמאות")
+        df_logs.to_excel(writer, index=False, sheet_name="יומן_אבטחה")
+    return out.getvalue()
+
+
+# ==============================================================================
+# פרק 6: תצוגות מערכת לפי תפקיד (Presentation Layer)
+# ==============================================================================
+
+# ---------- 6א. מסך כניסה + איפוס סיסמה לספק + אימות דו-שלבי לקישור ----------
 def render_login(conn):
-    _, center, _ = st.columns([0.8, 2, 0.8])
+    _, center, _ = st.columns([0.8, 2.2, 0.8])
     with center:
         st.markdown("""
         <div class="header-box" style="text-align: center !important;">
             <div class="header-title" style="text-align: center !important;">🛡️ פורטל SAPakim - חט"ל</div>
-            <div class="header-sub" style="text-align: center !important;">מערכת שו"ב ארגונית לבקרת הזמנות, מעקב פיגורים ותקשורת ספקים</div>
+            <div class="header-sub" style="text-align: center !important;">מערכת שו"ב ארגונית לבקרת הזמנות, מדורים ותקשורת ספקים מאובטחת</div>
         </div>""", unsafe_allow_html=True)
 
-        with st.container(border=True):
-            st.markdown("##### הזדהות וכניסה למערכת")
-            st.caption("אנא הזן את מפתח הגישה האישי (Access Key) שהונפק עבורך.")
+        tab_login, tab_reset = st.tabs(["🔒 כניסה למערכת", "🔑 איפוס / הגדרת סיסמה לספק"])
 
-            if st.session_state.failed_attempts >= MAX_LOGIN_ATTEMPTS:
-                st.error("הגעת למספר הניסיונות המקסימלי. אנא רענן את הדף או פנה למנהל המערכת.")
-                st.stop()
+        with tab_login:
+            with st.container(border=True):
+                st.markdown("##### הזדהות וכניסה למערכת")
+                st.caption("הזן את מפתח הגישה האישי (Access Key) או את הסיסמה האישית שהגדרת.")
 
-            key_input = st.text_input("מפתח גישה סודי:", type="password", placeholder="••••••••••••").strip().upper()
-            if st.button("התחבר למערכת 🔒", type="primary", use_container_width=True):
-                if not login_with_key(conn, key_input):
-                    st.session_state.failed_attempts += 1
-                    st.error(f"מפתח גישה שגוי או שאינו מורשה (ניסיון {st.session_state.failed_attempts}/{MAX_LOGIN_ATTEMPTS}).")
+                if st.session_state.failed_attempts >= MAX_LOGIN_ATTEMPTS:
+                    st.error("הגעת למספר הניסיונות המקסימלי. אנא רענן את הדף או פנה למנהל המערכת.")
+                    st.stop()
+
+                key_input = st.text_input("מפתח גישה / סיסמה:", type="password", placeholder="••••••••••••")
+                if st.button("התחבר למערכת 🔒", type="primary", use_container_width=True):
+                    user_obj, err = authenticate_user(conn, key_input)
+                    if not user_obj:
+                        st.session_state.failed_attempts += 1
+                        st.error(f"{err} (ניסיון {st.session_state.failed_attempts}/{MAX_LOGIN_ATTEMPTS}).")
+                    else:
+                        st.session_state.user = user_obj
+                        st.session_state.link_verified = True
+                        st.session_state.failed_attempts = 0
+                        st.rerun()
+
+        with tab_reset:
+            with st.container(border=True):
+                st.markdown("##### 🔄 איפוס או החלפת סיסמה לספק")
+                st.caption("ספקים רשומים יכולים להגדיר לעצמם סיסמה אישית קבועה באמצעות אימות מספר הטלפון הרשום במערכת החט\"ל.")
+                sup_rows = conn.execute("SELECT entity_name, phone, access_key FROM access_keys WHERE role='supplier' ORDER BY entity_name").fetchall()
+                sup_names = [r["entity_name"] for r in sup_rows]
+                if not sup_names:
+                    st.info("טרם נטענו ספקים למערכת.")
                 else:
-                    st.rerun()
+                    sel_sup = st.selectbox("בחר את שם החברה שלך:", sup_names)
+                    verify_phone = st.text_input("הזן את מספר הטלפון הנייד של איש הקשר (או מפתח הגישה הנוכחי):", placeholder="למשל: 0546966537")
+                    new_pwd = st.text_input("בחר סיסמה חדשה (לפחות 4 תווים):", type="password")
+                    if st.button("עדכן סיסמה חדשה ושלח דיווח למנהל המערכת ✅", type="primary", use_container_width=True):
+                        sup_rec = conn.execute("SELECT * FROM access_keys WHERE role='supplier' AND entity_name=?", (sel_sup,)).fetchone()
+                        db_phone = clean_display_phone(sup_rec["phone"])
+                        if not db_phone:
+                            r_ord_p = conn.execute("SELECT supplier_phone FROM orders WHERE supplier_name=? AND supplier_phone!='' LIMIT 1", (sel_sup,)).fetchone()
+                            if r_ord_p:
+                                db_phone = clean_display_phone(r_ord_p["supplier_phone"])
+                        inp_phone = clean_display_phone(verify_phone)
+                        is_valid_auth = (
+                            (db_phone and inp_phone == db_phone)
+                            or (clean_str(verify_phone).upper() == sup_rec["access_key"].upper())
+                        )
+                        if not is_valid_auth:
+                            st.error("אימות נכשל: מספר הטלפון או מפתח הגישה אינם תואמים לרשום במערכת עבור ספק זה.")
+                        elif len(clean_str(new_pwd)) < 4:
+                            st.warning("נא לבחור סיסמה בת 4 תווים לפחות.")
+                        else:
+                            update_supplier_password(conn, sel_sup, clean_str(new_pwd), changed_by="איפוס עצמי במסך כניסה")
+                            st.success(f"✅ הסיסמה של '{sel_sup}' עודכנה בהצלחה! מנהל המערכת קיבל התראה. כעת ניתן להתחבר בלשונית הכניסה.")
+
         st.markdown('<div class="watermark">Powered by BEN HUR</div>', unsafe_allow_html=True)
 
 
-def login_with_key(conn, key):
-    row = conn.execute("SELECT * FROM access_keys WHERE UPPER(access_key)=?", (key,)).fetchone()
-    if row:
-        st.session_state.user = dict(row)
-        st.session_state.failed_attempts = 0
-        return True
-    return False
+def render_link_verification_gate(conn, user):
+    """מסך אימות דו-שלבי (2FA) לספק שנכנס דרך קישור וואטסאפ - מונע דליפת מידע אם הקישור הועבר הלאה."""
+    _, center, _ = st.columns([0.8, 2.2, 0.8])
+    with center:
+        st.markdown(f"""
+        <div class="header-box">
+            <div class="header-title">🛡️ אימות אבטחה לאיש קשר - {user['entity_name']}</div>
+            <div class="header-sub">הגנה מפני דליפת מידע: הצגת ההזמנות מורשית לאיש הקשר של הספק בלבד</div>
+        </div>""", unsafe_allow_html=True)
+
+        with st.container(border=True):
+            st.markdown("##### 📱 אימות זהות מהיר (חד-פעמי לחיבור זה)")
+            st.info(
+                "כדי להגן על סודיות ההזמנות ולמנוע חשיפת מידע לגורם שאינו מורשה, "
+                "אנא הזינו את **4 הספרות האחרונות של מספר הטלפון הנייד** של איש הקשר הרשום במערכת (או את הסיסמה האישית שלכם)."
+            )
+            pin_inp = st.text_input("4 ספרות אחרונות של הטלפון הנייד (או סיסמה אישית):", max_chars=20, placeholder="למשל: 6537")
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                if st.button("אמת זהות והצג הזמנות 🔓", type="primary", use_container_width=True):
+                    if verify_supplier_pin(conn, user, pin_inp):
+                        st.session_state.link_verified = True
+                        st.rerun()
+                    else:
+                        st.session_state.failed_attempts += 1
+                        st.error("הספרות שהוזנו אינן תואמות לטלפון איש הקשר של הספק.")
+            with c2:
+                if st.button("יציאה למסך ראשי 🚪", use_container_width=True):
+                    st.session_state.user = None
+                    st.query_params.clear()
+                    st.rerun()
 
 
 def render_top_bar(conn, user):
@@ -690,9 +932,12 @@ def render_top_bar(conn, user):
             contact_str = clean_str(r_c["contact_person"])
 
     if user["role"] == "supplier":
-        sub_text = f"👤 איש קשר: {contact_str}" if contact_str else "פורטל עדכון סטטוס הזמנות ספק"
+        sub_text = f"👤 איש קשר מורשה: {contact_str}" if contact_str else "פורטל עדכון סטטוס הזמנות ספק"
+    elif user["role"] == "admin":
+        sub_text = "מחובר בהרשאת: מנהל מערכת ראשי (גישה מלאה לכל התאים ולכל המדורים)"
     else:
-        sub_text = f"מחובר בהרשאת: {user['role']}"
+        mgr_scope = user.get("assigned_manager", "ALL")
+        sub_text = f"מחובר בהרשאת מדור | שיוך אוטומטי להזמנות: {mgr_scope}"
 
     c1, c2 = st.columns([4.5, 1])
     with c1:
@@ -705,44 +950,95 @@ def render_top_bar(conn, user):
         if st.button("התנתק 🚪", use_container_width=True):
             st.session_state.user = None
             st.session_state.submitted = False
+            st.session_state.link_verified = False
+            st.session_state.pending_admin_changes = None
             st.query_params.clear()
             st.rerun()
 
 
-# ==================== 5ב. ממשק מנהל ומדורים ====================
+# ---------- 6ב. ממשק מנהל מערכת ומדורים ----------
 def render_staff(conn, user):
+    is_admin = (user["role"] == "admin")
+
     if USE_PG:
-        st.success("🟢 מחובר למסד הנתונים הקבוע בענן (Neon PostgreSQL) – כל ההזמנות, ימי הפיגור ותגובות הספקים שמורים ומגובים.")
+        st.success("🟢 מחובר למסד הנתונים הקבוע בענן (Neon PostgreSQL) – כל ההזמנות, השיוכים ויומני האבטחה שמורים ומגובים.")
     else:
         st.warning("⚠️ המערכת עובדת עם מסד נתונים זמני. הגדירו DATABASE_URL של Neon ב-Secrets לחיבור קבוע.")
-    tab_orders, tab_wa, tab_upload = st.tabs([
-        "📊 הזמנות, פיגורים ומענה מדור",
-        "💬 שיגור וואטסאפ אוטומטי",
+
+    # התראות אבטחה ושינויי סיסמאות ספקים למנהל המערכת
+    if is_admin:
+        unread_logs = conn.execute(
+            "SELECT * FROM security_logs WHERE is_read=0 AND event_type='החלפת סיסמת ספק' ORDER BY id DESC"
+        ).fetchall()
+        if unread_logs:
+            with st.container(border=True):
+                st.warning(f"🔔 **התראת אבטחה למנהל המערכת – {len(unread_logs)} ספקים החליפו סיסמה לאחרונה:**")
+                for lg in unread_logs:
+                    st.markdown(
+                        f"• **{lg['event_time']}** | ספק: **{lg['actor_name']}** | {lg['details']} | "
+                        f"🔑 סיסמה חדשה שהוגדרה: `{lg['new_credential']}`"
+                    )
+                if st.button("✔️ סמן התראות כנקראו", key="ack_sec_logs"):
+                    conn.execute("UPDATE security_logs SET is_read=1 WHERE event_type='החלפת סיסמת ספק'")
+                    conn.commit()
+                    st.rerun()
+
+    tabs_list = [
+        "📊 הזמנות, פיגורים ומענה",
+        "💬 שיגור וואטסאפ למדור",
         "📥 טעינת אקסל (VLOOKUP חכם)",
-    ])
-    with tab_orders:
+    ]
+    if is_admin:
+        tabs_list.append("🔐 ניהול אבטחה, סיסמאות ספקים וגיבוי (Admin)")
+
+    tabs = st.tabs(tabs_list)
+    with tabs[0]:
         render_orders_tab(conn, user)
-    with tab_wa:
-        render_whatsapp_tab(conn)
-    with tab_upload:
-        render_upload_tab(conn)
+    with tabs[1]:
+        render_whatsapp_tab(conn, user)
+    with tabs[2]:
+        render_upload_tab(conn, user)
+    if is_admin and len(tabs) > 3:
+        with tabs[3]:
+            render_security_admin_tab(conn, user)
+
+
+def get_scoped_orders_df(conn, user):
+    """מחזיר את ההזמנות בהתאם להרשאה: מנהל רואה הכל, מדור רואה אוטומטית רק את ההזמנות המשויכות אליו."""
+    mgr_scope = user.get("assigned_manager", "ALL")
+    if user["role"] == "admin" or mgr_scope == "ALL":
+        df = query_df(conn, "SELECT * FROM orders ORDER BY needs_attention DESC, supplier_name, order_number")
+    else:
+        df = query_df(
+            conn,
+            "SELECT * FROM orders WHERE order_manager=? ORDER BY needs_attention DESC, supplier_name, order_number",
+            (mgr_scope,),
+        )
+    return enrich_orders_df(df)
 
 
 def render_orders_tab(conn, user):
     is_admin = (user["role"] == "admin")
-    df = query_df(conn, "SELECT * FROM orders ORDER BY needs_attention DESC, supplier_name, order_number")
+    df = get_scoped_orders_df(conn, user)
     if df.empty:
-        st.info("אין עדיין הזמנות במערכת. עבור ללשונית 'טעינת אקסל' כדי להעלות קובץ.")
+        st.info("אין הזמנות המשויכות למדור זה כרגע. עבור ללשונית 'טעינת אקסל' להעלאת קובץ.")
         return
 
-    df = enrich_delay_columns(df)
+    # סינון לפי מנהל ההזמנה (מדור) עבור מנהל המערכת
+    if is_admin:
+        f_mgr1, f_mgr2 = st.columns([1.2, 2.8])
+        with f_mgr1:
+            selected_mgr = st.selectbox("🎯 סנן לפי מנהל ההזמנה (מדור):", ["כל המדורים"] + MANAGER_OPTIONS)
+        if selected_mgr != "כל המדורים":
+            df = df[df["order_manager"] == selected_mgr].copy()
+
     overdue_mask = df["delay_days_num"].fillna(0) > 0
-    avg_delay = int(df.loc[overdue_mask, "delay_days_num"].mean()) if overdue_mask.any() else 0
+    weekly_updated_count = int(df["weekly_status_display"].astype(str).str.contains("עודכן השבוע").sum())
 
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric('סה"כ שורות הזמנה', len(df))
+    k1.metric('סה"כ שורות הזמנה במדור', len(df))
     k2.metric("שורות בפיגור מתאריך המקור", int(overdue_mask.sum()))
-    k3.metric("ממוצע ימי פיגור", f"{avg_delay} ימים")
+    k3.metric("🟢 עודכנו השבוע ע\"י ספק", weekly_updated_count)
     k4.metric("⚠️ ממתינות למענה מדור", int((df["needs_attention"] == 1).sum()))
 
     f1, f2 = st.columns([1.5, 1])
@@ -758,35 +1054,30 @@ def render_orders_tab(conn, user):
         view = view[not_done(view["supplier_status"])]
 
     if mode.startswith("📱"):
-        render_staff_cards(conn, view, is_admin)
+        render_staff_cards(conn, view, is_admin, user)
     else:
-        render_staff_table(conn, view, is_admin)
+        render_staff_table(conn, view, is_admin, user)
 
     st.download_button(
-        "📥 הורד דוח אקסל מלא (כולל עמודת פיגור בימים, אנשי קשר וטלפונים מלאים)",
+        "📥 הורד דוח אקסל מלא (כולל מנהל הזמנה, פיגור בימים וסטטוס שבועי)",
         data=export_excel(df), file_name="suppliers_updated.xlsx", use_container_width=True,
     )
 
     if is_admin:
-        render_admin_delete_panel(conn, df)
+        render_admin_delete_panel(conn, df, user["entity_name"])
 
 
-def render_staff_cards(conn, view, is_admin=False):
-    st.caption("🔒 נתוני הספק נעולים. לחץ על הזמנה לצפייה בימי הפיגור, באיש הקשר ולהזנת מענה מדור.")
+def render_staff_cards(conn, view, is_admin, user):
     for _, r in view.iterrows():
         icon = "⚠️" if r["needs_attention"] == 1 else "📦"
-        with st.expander(f"{icon} {r['supplier_name']} | הזמנה {r['order_number']} שורה {r['line_number']} | {r['delay_days_display']}"):
+        with st.expander(f"{icon} [{r['order_manager']}] {r['supplier_name']} | הזמנה {r['order_number']} שורה {r['line_number']} | {r['delay_days_display']}"):
             st.markdown(f"""
             <div class="order-card-header">
-                <strong>פריט:</strong> {r['item_description']} | <strong>מק"ט:</strong> {r['part_number']} | <strong>תאריך מקורי:</strong> {r['due_date'] or '-'}<br>
-                <strong>⏳ סטטוס פיגור:</strong> {r['delay_days_display']} | <strong>👤 איש קשר:</strong> {r['contact_person'] or '-'} | <strong>📞 טלפון:</strong> {r['supplier_phone'] or 'חסר'}
+                <strong>מנהל הזמנה:</strong> {r['order_manager']} | <strong>פריט:</strong> {r['item_description']} | <strong>מק"ט:</strong> {r['part_number']}<br>
+                <strong>⏳ פיגור:</strong> {r['delay_days_display']} | <strong>📅 סטטוס שבועי:</strong> {r['weekly_status_display']} | <strong>👤 איש קשר:</strong> {r['contact_person'] or '-'} ({r['supplier_phone'] or 'חסר'})
             </div>""", unsafe_allow_html=True)
-            if r["needs_attention"] == 1:
-                reason = attention_reason(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"])
-                if reason:
-                    st.warning(f"⚠️ סיבת הסימון: {reason}")
-            st.markdown(f"🔒 **סטטוס עדכני:** `{r['supplier_status']}` | **צפי ספק:** `{r['expected_date'] or r['due_date'] or 'לא הוזן'}`")
-            st.markdown(f"🔒 **תגובת / הערת ספק:** {r['supplier_note'] or 'אין הערות'}")
+            st.markdown(f"🔒 **סטטוס ספק:** `{r['supplier_status']}` | **צפי ספק:** `{r['expected_date'] or r['due_date']}`")
+            st.markdown(f"🔒 **תגובת ספק:** {r['supplier_note'] or 'אין הערות'}")
 
             reply = st.text_area("✍️ מענה מדור לספק:", value=r["mador_response"], key=f"mresp_{r['id']}")
             c_save, c_del = st.columns([3, 1]) if is_admin else (st.container(), None)
@@ -800,16 +1091,42 @@ def render_staff_cards(conn, view, is_admin=False):
             if is_admin and c_del is not None:
                 with c_del:
                     if st.button("🗑️ מחק שורה", key=f"mdel_{r['id']}", use_container_width=True):
-                        delete_orders_by_ids(conn, [r["id"]])
-                        st.success(f"הזמנה {r['order_number']} שורה {r['line_number']} נמחקה!")
+                        delete_orders_by_ids(conn, [r["id"]], user["entity_name"])
                         st.rerun()
 
 
-def render_staff_table(conn, view, is_admin=False):
+def compute_table_diff(orig_df, edited_df, compare_cols):
+    """מחשב אילו תאים בדיוק שונו בטבלה כדי להציג התראה לאישור מנהל לפני שמירה."""
+    orig_by_id = orig_df.set_index("id")
+    changes = []
+    for _, row in edited_df.iterrows():
+        oid = row["id"]
+        if oid not in orig_by_id.index:
+            continue
+        orig_row = orig_by_id.loc[oid]
+        for col_name, heb_label in compare_cols.items():
+            old_val = clean_str(orig_row[col_name])
+            new_val = clean_str(row[col_name])
+            if old_val != new_val:
+                changes.append({
+                    "id": int(oid),
+                    "הזמנה ושורה": f"{row['order_number']} / {row['line_number']}",
+                    "ספק": row["supplier_name"],
+                    "שדה שהשתנה": heb_label,
+                    "ערך קודם": old_val or "(ריק)",
+                    "ערך חדש": new_val or "(ריק)",
+                })
+    return changes
+
+
+def render_staff_table(conn, view, is_admin, user):
     if is_admin:
-        st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. עמודת "⏳ פיגור בימים" מחושבת אוטומטית ביחס לתאריך האספקה המקורי.')
+        st.caption(
+            "🔓 **מצב מנהל מערכת (Full Access):** כל התאים בטבלה פתוחים לעריכה מלאה (כולל תאי ספק, הזמנה ומנהל הזמנה). "
+            "לחיצה על 'שמור' תציג חלונית התראה לאישור השינויים לפני כתיבה למסד."
+        )
     else:
-        st.caption('🔒 **אבטחת מידע:** עמודות דיווח הספק נעולות. המדור יכול לעדכן איש קשר, טלפון, מק"ט ומענה מדור.')
+        st.caption('🔒 **אבטחת מידע למדור:** עמודות דיווח הספק נעולות. המדור רשאי לעדכן מנהל הזמנה, איש קשר, טלפון ומענה מדור.')
 
     view = view.copy()
     view["attention"] = [
@@ -820,30 +1137,35 @@ def render_staff_table(conn, view, is_admin=False):
         view["delete_row"] = False
 
     base_cols = [
-        "id", "supplier_name", "contact_person", "supplier_phone",
+        "id", "order_manager", "supplier_name", "contact_person", "supplier_phone",
         "order_number", "line_number", "part_number", "item_description",
-        "due_date", "delay_days_display", "supplier_status", "expected_date",
-        "supplier_note", "mador_response", "attention",
+        "due_date", "delay_days_display", "weekly_status_display",
+        "supplier_status", "expected_date", "supplier_note", "mador_response", "attention",
     ]
     cols = base_cols + (["delete_row"] if is_admin else [])
 
     T = st.column_config.TextColumn
-    # הגדרת רוחב קשיח ומפורש לכל עמודה כדי למנוע חיתוך של מספרי טלפון, הזמנות, שורות ומק"טים!
+    S = st.column_config.SelectboxColumn
+    # למנהל מערכת (is_admin=True) כלל התאים פתוחים (disabled=False)! למדור רגיל תאי הספק נעולים.
+    lock_for_mador = not is_admin
+
     col_cfg = {
         "id": None,
-        "supplier_name": T("חברה", disabled=True, width="medium"),
+        "order_manager": S("🎯 מנהל ההזמנה", options=MANAGER_OPTIONS, required=True, width="small"),
+        "supplier_name": T("חברה", disabled=lock_for_mador, width="medium"),
         "contact_person": T("👤 איש קשר", width="medium"),
         "supplier_phone": T("📞 מספר טלפון", width="medium"),
-        "order_number": T("מספר הזמנה", disabled=True, width="medium"),
-        "line_number": T("שורה", disabled=True, width="small"),
+        "order_number": T("מספר הזמנה", disabled=lock_for_mador, width="medium"),
+        "line_number": T("שורה", disabled=lock_for_mador, width="small"),
         "part_number": T('מק"ט', width="medium"),
         "item_description": T("שם פריט", width="large"),
         "due_date": T("תאריך מקורי", width="small"),
         "delay_days_display": T("⏳ פיגור בימים", disabled=True, width="medium"),
-        "supplier_status": T("🔒 סטטוס עדכני", disabled=True, width="medium"),
-        "expected_date": T("🔒 צפי ספק", disabled=True, width="small"),
-        "supplier_note": T("🔒 תגובת ספק", disabled=True, width="large"),
-        "mador_response": T("✍️ מענה מדור לספק (ערוך כאן)", width="large"),
+        "weekly_status_display": T("📅 סטטוס שבועי", disabled=True, width="medium"),
+        "supplier_status": S("סטטוס עדכני", options=STATUS_OPTIONS, disabled=lock_for_mador, width="medium") if is_admin else T("🔒 סטטוס עדכני", disabled=True, width="medium"),
+        "expected_date": T("צפי ספק", disabled=lock_for_mador, width="small"),
+        "supplier_note": T("תגובת ספק", disabled=lock_for_mador, width="large"),
+        "mador_response": T("✍️ מענה מדור לספק", width="large"),
         "attention": T("⚠️ סיבת סימון", disabled=True, width="large"),
     }
     if is_admin:
@@ -854,33 +1176,36 @@ def render_staff_table(conn, view, is_admin=False):
         column_config=col_cfg,
         use_container_width=True,
         hide_index=True,
+        key="staff_main_editor",
     )
+
+    compare_map = {
+        "order_manager": "מנהל ההזמנה",
+        "supplier_name": "חברה",
+        "contact_person": "איש קשר",
+        "supplier_phone": "מספר טלפון",
+        "order_number": "מספר הזמנה",
+        "line_number": "שורה",
+        "part_number": 'מק"ט',
+        "item_description": "שם פריט",
+        "due_date": "תאריך מקורי",
+        "supplier_status": "סטטוס עדכני",
+        "expected_date": "צפי ספק",
+        "supplier_note": "תגובת ספק",
+        "mador_response": "מענה מדור",
+    }
 
     btn_col1, btn_col2 = st.columns([2, 1]) if is_admin else (st.container(), None)
     with btn_col1:
-        if st.button("💾 שמור תשובות מדור ועדכוני אנשי קשר", type="primary", use_container_width=True):
-            now = datetime.now().strftime("%d/%m/%Y %H:%M")
-            for _, r in edited.iterrows():
-                phone = clean_display_phone(r["supplier_phone"])
-                contact = clean_str(r["contact_person"])
-                part = clean_part_num(r["part_number"])
-                conn.execute(
-                    """UPDATE orders
-                       SET contact_person=?, supplier_phone=?, part_number=?, item_description=?,
-                           due_date=?, mador_response=?, needs_attention=0, last_updated=?
-                       WHERE id=?""",
-                    (contact, phone, part, r["item_description"], r["due_date"], r["mador_response"], now, r["id"]),
-                )
-                if phone or contact:
-                    conn.execute(
-                        """UPDATE access_keys
-                           SET phone=COALESCE(NULLIF(?, ''), phone), contact_person=COALESCE(NULLIF(?, ''), contact_person)
-                           WHERE role='supplier' AND entity_name=?""",
-                        (phone, contact, r["supplier_name"]),
-                    )
-            conn.commit()
-            st.success("הנתונים ותשובות המדור נשמרו בהצלחה!")
-            st.rerun()
+        if st.button("💾 בדוק ושמור שינויים בטבלה", type="primary", use_container_width=True):
+            diffs = compute_table_diff(view, edited, compare_map)
+            if not diffs:
+                st.info("לא זוהו שינויים בנתוני הטבלה.")
+            else:
+                st.session_state.pending_admin_changes = {
+                    "diffs": diffs,
+                    "rows": edited.to_dict(orient="records"),
+                }
 
     if is_admin and btn_col2 is not None:
         with btn_col2:
@@ -889,29 +1214,79 @@ def render_staff_table(conn, view, is_admin=False):
                 if not to_delete:
                     st.warning("לא סומנו שורות למחיקה בטבלה.")
                 else:
-                    delete_orders_by_ids(conn, to_delete)
+                    delete_orders_by_ids(conn, to_delete, user["entity_name"])
                     st.success(f"נמחקו {len(to_delete)} שורות הזמנה בהצלחה!")
                     st.rerun()
 
+    # חלונית התראה ואישור לפני ביצוע שינוי (Confirmation Prompt)
+    pending = st.session_state.get("pending_admin_changes")
+    if pending:
+        with st.container(border=True):
+            st.warning(f"⚠️ **התראת אישור שינוי נתונים ({len(pending['diffs'])} שדות שונו):** אנא בדוק ואשר את השינויים הבאים לפני שמירה למסד הנתונים:")
+            st.dataframe(pd.DataFrame(pending["diffs"]).drop(columns=["id"], errors="ignore"), use_container_width=True, hide_index=True)
+            ca1, ca2 = st.columns(2)
+            with ca1:
+                if st.button("✅ אני מאשר – שמור שינויים למסד הנתונים", type="primary", use_container_width=True):
+                    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    for r in pending["rows"]:
+                        phone = clean_display_phone(r["supplier_phone"])
+                        contact = clean_str(r["contact_person"])
+                        part = clean_part_num(r["part_number"])
+                        ord_num = clean_id_num(r["order_number"])
+                        line_num = clean_id_num(r["line_number"]) or "10"
+                        mgr = r["order_manager"] if r["order_manager"] in MANAGER_OPTIONS else 'נמ"ר'
+                        flag = needs_attention(r["supplier_status"], r["supplier_note"], r["expected_date"], r["due_date"])
+                        if r["mador_response"]:
+                            flag = False
+                        conn.execute(
+                            """UPDATE orders
+                               SET order_manager=?, supplier_name=?, contact_person=?, supplier_phone=?,
+                                   order_number=?, line_number=?, part_number=?, item_description=?,
+                                   due_date=?, supplier_status=?, expected_date=?, supplier_note=?,
+                                   mador_response=?, needs_attention=?, last_updated=?
+                               WHERE id=?""",
+                            (
+                                mgr, clean_str(r["supplier_name"]), contact, phone,
+                                ord_num, line_num, part, clean_str(r["item_description"]),
+                                clean_str(r["due_date"]), r["supplier_status"], clean_str(r["expected_date"]),
+                                clean_str(r["supplier_note"]), clean_str(r["mador_response"]),
+                                int(flag), now, int(r["id"]),
+                            ),
+                        )
+                        if phone or contact:
+                            get_or_create_key(conn, r["supplier_name"], contact, phone)
+                    conn.commit()
+                    log_security_event(
+                        conn,
+                        "עריכת טבלה מאושרת",
+                        user["entity_name"],
+                        f"אושרו ונשמרו {len(pending['diffs'])} שינויים בטבלת ההזמנות.",
+                    )
+                    st.session_state.pending_admin_changes = None
+                    st.success("✅ השינויים אושרו ונשמרו בהצלחה למסד הנתונים!")
+                    st.rerun()
+            with ca2:
+                if st.button("❌ בטל שינויים", use_container_width=True):
+                    st.session_state.pending_admin_changes = None
+                    st.rerun()
 
-def render_admin_delete_panel(conn, df):
+
+def render_admin_delete_panel(conn, df, actor_name):
     st.divider()
     with st.expander("🗑️ ניהול מחיקת הזמנות שהסתיימו / קיבלו מענה (הרשאת מנהל מערכת בלבד)"):
-        st.caption("כאן תוכל למחוק הזמנות שהתקבלו או שהטיפול בהן הסתיים.")
         c1, c2 = st.columns(2)
-
         with c1:
             st.markdown("**1. מחיקת הזמנה שלמה או שורות נבחרות:**")
             df_opts = df.copy()
             df_opts["label"] = [
-                f"הזמנה {r['order_number']} | שורה {r['line_number']} | {r['supplier_name']} ({r['supplier_status']})"
+                f"[{r['order_manager']}] הזמנה {r['order_number']} | שורה {r['line_number']} | {r['supplier_name']} ({r['supplier_status']})"
                 for _, r in df_opts.iterrows()
             ]
             label_to_id = dict(zip(df_opts["label"], df_opts["id"]))
             selected_labels = st.multiselect("בחר הזמנות / שורות למחיקה:", options=df_opts["label"].tolist())
             if selected_labels and st.button(f"🗑️ מחק לצמיתות {len(selected_labels)} שורות שנבחרו", key="del_selected_admin"):
                 ids = [label_to_id[lbl] for lbl in selected_labels]
-                delete_orders_by_ids(conn, ids)
+                delete_orders_by_ids(conn, ids, actor_name)
                 st.success(f"נמחקו {len(ids)} שורות מהמערכת!")
                 st.rerun()
 
@@ -921,13 +1296,13 @@ def render_admin_delete_panel(conn, df):
             st.write(f"שורות המסומנות כעת בסטטוס **'{DONE_STATUS}'**: `{len(done_ids)}` שורות.")
             confirm_done = st.checkbox("אני מאשר מחיקה של כל השורות שסופקו", key="confirm_del_done")
             if st.button(f"🧹 מחק את כל השורות שסופקו ({len(done_ids)})", disabled=not (confirm_done and done_ids)):
-                delete_orders_by_ids(conn, done_ids)
+                delete_orders_by_ids(conn, done_ids, actor_name)
                 st.success(f"נמחקו {len(done_ids)} שורות שסופקו!")
                 st.rerun()
 
 
 def export_excel(df):
-    df_enriched = enrich_delay_columns(df)
+    df_enriched = enrich_orders_df(df)
     export_df = pd.DataFrame({heb: df_enriched[col] for heb, col in EXPORT_MAP.items()})
     out = BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
@@ -935,44 +1310,37 @@ def export_excel(df):
     return out.getvalue()
 
 
-# ---------- וואטסאפ ----------
-SUPPLIERS_SQL = '''
-    SELECT
-        u.entity_name AS supplier_name,
-        COALESCE(NULLIF(MAX(o.contact_person), ''), NULLIF(u.contact_person, ''), '') AS contact_person,
-        COALESCE(NULLIF(MAX(o.supplier_phone), ''), NULLIF(u.phone, ''), '') AS phone,
-        u.access_key,
-        COUNT(o.id) AS total_orders,
-        COALESCE(CAST(SUM(CASE WHEN TRIM(COALESCE(o.supplier_status, '')) != 'סופק' THEN 1 ELSE 0 END) AS INTEGER), 0) AS open_or_delayed_orders
-    FROM access_keys u
-    LEFT JOIN orders o ON o.supplier_name = u.entity_name
-    WHERE u.role = 'supplier'
-    GROUP BY u.entity_name, u.access_key, u.contact_person, u.phone
-    ORDER BY open_or_delayed_orders DESC, u.entity_name
-'''
-
-
-def build_whatsapp_message(conn, sup, sender):
+# ---------- 6ג. לשונית וואטסאפ (ממודרת אוטומטית לפי מנהל ההזמנה / המדור המחובר) ----------
+def build_whatsapp_message(conn, sup, sender, mgr_scope="ALL"):
     name = sup["supplier_name"]
-    rows = conn.execute(
-        "SELECT order_number, line_number, item_description, due_date FROM orders "
-        "WHERE supplier_name=? AND TRIM(COALESCE(supplier_status, '')) != ?", (name, DONE_STATUS)).fetchall()
-    if not rows:
+    if mgr_scope == "ALL":
         rows = conn.execute(
-            "SELECT order_number, line_number, item_description, due_date FROM orders WHERE supplier_name=?", (name,)).fetchall()
+            "SELECT order_number, line_number, item_description, due_date, order_manager FROM orders "
+            "WHERE supplier_name=? AND TRIM(COALESCE(supplier_status, '')) != ?",
+            (name, DONE_STATUS),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT order_number, line_number, item_description, due_date, order_manager FROM orders "
+            "WHERE supplier_name=? AND order_manager=? AND TRIM(COALESCE(supplier_status, '')) != ?",
+            (name, mgr_scope, DONE_STATUS),
+        ).fetchall()
+
     lines = "\n".join(
-        f"• הזמנה {clean_id_num(o['order_number'])} שורה {clean_id_num(o['line_number'])} - {o['item_description']} (יעד מקורי: {o['due_date'] or '-'})"
-        for o in rows[:10]
+        f"• הזמנה {clean_id_num(o['order_number'])} שורה {clean_id_num(o['line_number'])} - {o['item_description']} (יעד: {o['due_date'] or '-'})"
+        for o in rows[:12]
     )
     greeting = sup["contact_person"] or name
+    phone_clean = clean_display_phone(sup["phone"])
+    last4_hint = f" (אימות כניסה: 4 ספרות אחרונות של הטלפון שלך - {phone_clean[-4:]})" if len(phone_clean) >= 4 else ""
     link = f"{APP_URL}/?key={sup['access_key']}"
     return (
         f"היי {greeting}, מה נשמע?\n"
         f"זה {sender} מהחט\"ל. אני עובר על דו\"ח ההזמנות הפתוחות שלנו מול {name} וראיתי שיש לנו פער בלוח הזמנים בפריטים הבאים:\n"
         f"{lines}\n\n"
-        f"כדי לעדכן סטטוס וצפי אספקה בלחיצה אחת (ולכתוב לנו אם נדרש מענה מהמדור), היכנסו לקישור האישי שלכם:\n"
+        f"כדי לעדכן סטטוס וצפי אספקה בלחיצה אחת, היכנסו לקישור המאובטח שלכם:\n"
         f"{link}\n"
-        f"(מפתח גישה אישי: {sup['access_key']})\n"
+        f"(מפתח גישה: {sup['access_key']}{last4_hint})\n"
         f"תודה מראש על שיתוף הפעולה, {sender}."
     )
 
@@ -1042,9 +1410,54 @@ def render_launcher(items):
     components.html(html, height=160 + (len(items) // 2) * 55, scrolling=True)
 
 
-def render_whatsapp_tab(conn):
-    st.markdown("##### 💬 מערך שיגור הודעות וואטסאפ אוטומטי לספקים ואנשי קשר")
-    df_sups = query_df(conn, SUPPLIERS_SQL)
+def render_whatsapp_tab(conn, user):
+    mgr_scope = user.get("assigned_manager", "ALL")
+    if user["role"] == "admin":
+        sel_mgr = st.selectbox("🎯 בחר מדור לשליחת וואטסאפ לספקים שלו:", ["ALL (כל המדורים)"] + MANAGER_OPTIONS, key="wa_mgr_sel")
+        if not sel_mgr.startswith("ALL"):
+            mgr_scope = sel_mgr
+        else:
+            mgr_scope = "ALL"
+
+    st.markdown(f"##### 💬 מערך שיגור הודעות וואטסאפ לספקים (שיוך הזמנות: {mgr_scope})")
+
+    if mgr_scope == "ALL":
+        sup_sql = '''
+            SELECT
+                u.entity_name AS supplier_name,
+                COALESCE(NULLIF(MAX(o.contact_person), ''), NULLIF(u.contact_person, ''), '') AS contact_person,
+                COALESCE(NULLIF(MAX(o.supplier_phone), ''), NULLIF(u.phone, ''), '') AS phone,
+                u.access_key,
+                COUNT(o.id) AS total_orders,
+                COALESCE(CAST(SUM(CASE WHEN TRIM(COALESCE(o.supplier_status, '')) != 'סופק' THEN 1 ELSE 0 END) AS INTEGER), 0) AS open_or_delayed_orders
+            FROM access_keys u
+            LEFT JOIN orders o ON o.supplier_name = u.entity_name
+            WHERE u.role = 'supplier' AND COALESCE(u.is_locked, 0) = 0
+            GROUP BY u.entity_name, u.access_key, u.contact_person, u.phone
+            ORDER BY open_or_delayed_orders DESC, u.entity_name
+        '''
+        df_sups = query_df(conn, sup_sql)
+    else:
+        sup_sql = '''
+            SELECT
+                u.entity_name AS supplier_name,
+                COALESCE(NULLIF(MAX(o.contact_person), ''), NULLIF(u.contact_person, ''), '') AS contact_person,
+                COALESCE(NULLIF(MAX(o.supplier_phone), ''), NULLIF(u.phone, ''), '') AS phone,
+                u.access_key,
+                COUNT(o.id) AS total_orders,
+                COALESCE(CAST(SUM(CASE WHEN TRIM(COALESCE(o.supplier_status, '')) != 'סופק' THEN 1 ELSE 0 END) AS INTEGER), 0) AS open_or_delayed_orders
+            FROM access_keys u
+            INNER JOIN orders o ON o.supplier_name = u.entity_name AND o.order_manager = ?
+            WHERE u.role = 'supplier' AND COALESCE(u.is_locked, 0) = 0
+            GROUP BY u.entity_name, u.access_key, u.contact_person, u.phone
+            ORDER BY open_or_delayed_orders DESC, u.entity_name
+        '''
+        df_sups = query_df(conn, sup_sql, (mgr_scope,))
+
+    if df_sups.empty:
+        st.info(f"לא נמצאו ספקים עם הזמנות המשויכות למדור '{mgr_scope}'.")
+        return
+
     df_sups["phone"] = df_sups["phone"].apply(clean_display_phone)
     df_sups["wa_ready"] = df_sups["phone"].apply(lambda p: "✅ תקין" if format_wa_phone(p) else "❌ חסר נייד")
 
@@ -1053,10 +1466,10 @@ def render_whatsapp_tab(conn):
         with c1:
             filter_mode = st.radio("1️⃣ בחר אוכלוסיית ספקים לשליחה:", [
                 "📱 ספקים עם מספר נייד תקין לוואטסאפ (מומלץ לשליחה מיידית)",
-                "🔴 כל הספקים עם הזמנות פתוחות / בעיכוב",
-                "📋 כל הספקים במערכת",
+                "🔴 כל הספקים עם הזמנות פתוחות / בעיכוב במדור זה",
+                "📋 כל הספקים של מדור זה",
             ])
-        sender = c2.text_input("שם השולח בהודעה:", value="רועי")
+        sender = c2.text_input("שם השולח בהודעה:", value=user["entity_name"].split("-")[0].strip())
 
         if filter_mode.startswith("📱"):
             pool = df_sups[df_sups["phone"].apply(lambda p: format_wa_phone(p) is not None)].copy()
@@ -1086,7 +1499,7 @@ def render_whatsapp_tab(conn):
         wa_phone = format_wa_phone(sup["phone"])
         if not wa_phone:
             continue
-        text = urllib.parse.quote(build_whatsapp_message(conn, sup, sender))
+        text = urllib.parse.quote(build_whatsapp_message(conn, sup, sender, mgr_scope))
         items.append((sup["supplier_name"], sup["contact_person"], sup["phone"], f"https://wa.me/{wa_phone}?text={text}"))
         script_targets.append((sup["supplier_name"], sup["contact_person"],
                                f"https://web.whatsapp.com/send?phone={wa_phone}&text={text}"))
@@ -1094,7 +1507,7 @@ def render_whatsapp_tab(conn):
     if not chosen.empty:
         st.markdown(f"##### 3️⃣ לוח שיגור ישיר ({len(items)} ספקים עם מספר נייד תקין):")
         if not items:
-            st.warning("לספקים שסימנת אין מספר נייד תקין. גש ללשונית '📥 טעינת אקסל' וטען את הקובץ שלך!")
+            st.warning("לספקים שסימנת אין מספר נייד תקין.")
         else:
             render_launcher(items)
             st.download_button(
@@ -1103,40 +1516,32 @@ def render_whatsapp_tab(conn):
                 file_name="auto_send_sapakim.py", mime="text/x-python", use_container_width=True,
             )
 
-    st.divider()
-    with st.expander("🔑 טבלת ריכוז ספקים, אנשי קשר, טלפונים ומפתחות גישה", expanded=True):
-        st.dataframe(
-            df_sups.rename(columns={
-                "supplier_name": "חברה", "contact_person": "איש קשר", "phone": "מספר טלפון",
-                "access_key": "מפתח גישה", "total_orders": 'סה"כ שורות',
-                "open_or_delayed_orders": "שורות פתוחות", "wa_ready": "סטטוס וואטסאפ",
-            }),
-            use_container_width=True, hide_index=True,
-        )
 
-
-# ---------- טעינת אקסל (VLOOKUP חכם ללא דריסת תשובות קיימות) ----------
-def render_upload_tab(conn):
+# ---------- 6ד. טעינת אקסל (VLOOKUP חכם + שיוך מנהל הזמנה) ----------
+def render_upload_tab(conn, user):
     st.markdown("##### 📥 טעינת קובץ אקסל (`suppliers.xlsx`) - מנגנון VLOOKUP חכם למסד הנתונים")
     st.info(
-        "💡 **איך עובד הסנכרון החכם (VLOOKUP)?**\n"
-        "• **שורות והזמנות חדשות** מתווספות אוטומטית למסד הנתונים (כולל תיקון אוטומטי למספרי טלפון של 9 ספרות ומק\"טים).\n"
-        "• **שורות קיימות** מתעדכנות בפרטים החדשים **מבלי למחוק או לדרוס** תגובות ספקים, צפי אספקה או מענה מדור שכבר הוזנו באתר!\n"
-        "• **זיכרון אנשי קשר וטלפונים:** אם לספק מוכר חסר טלפון או איש קשר בחלק מהשורות, המערכת משלימה אותם אוטומטית לכל השורות שלו."
+        "💡 **סנכרון חכם (VLOOKUP):**\n"
+        "• קולט אוטומטית את עמודת **'מנהל ההזמנה'** (נמ\"ר / מרכבה / איתן / מנה\"ר) או מזהה אותה מתוך שם הפריט.\n"
+        "• שומר על תגובות הספקים, הצפי ומענה המדור הקיימים במסד הנתונים מבלי לדרוס אותם!"
+    )
+    default_mgr = st.selectbox(
+        "ברירת מחדל עבור 'מנהל ההזמנה' (לשורות שבהן לא צוין מדור מפורש באקסל):",
+        MANAGER_OPTIONS,
+        index=0,
     )
     uploaded = st.file_uploader("בחר קובץ Excel או CSV", type=["xlsx", "xls", "csv"])
     if uploaded and st.button("טען וסנכרן הזמנות למסד הנתונים (ללא מחיקת קיימים) ⚡", type="primary", use_container_width=True):
-        # קריאת הקובץ כמחרוזות (dtype=str) כדי שאקסל לא יחתוך אפסים מובילים ממספרי טלפון ומק"טים!
         df = pd.read_csv(uploaded, dtype=str) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded, dtype=str)
         df.columns = [str(c).strip() for c in df.columns]
-        result = import_orders(conn, df)
+        result = import_orders(conn, df, default_mgr, user["entity_name"])
         st.success(
-            f"✅ הסנכרון למסד הנתונים הושלם! עובדו {result['rows']} שורות הזמנה "
-            f"({result['contacts']} עם איש קשר, {result['phones']} עם טלפון מלא) ללא מחיקת היסטוריה קיימת!"
+            f"✅ הסנכרון הושלם! עובדו {result['rows']} שורות הזמנה "
+            f"({result['contacts']} עם איש קשר, {result['phones']} עם טלפון מלא)."
         )
 
 
-def import_orders(conn, df):
+def import_orders(conn, df, default_mgr='נמ"ר', actor_name="מערכת"):
     cols = df.columns.tolist()
     col = {key: find_col(cols, aliases) for key, aliases in EXCEL_ALIASES.items()}
 
@@ -1152,6 +1557,9 @@ def import_orders(conn, df):
         line_num = clean_id_num(get(r, "line")) or "10"
         part_num = clean_part_num(get(r, "part"))
         qty_num = clean_id_num(get(r, "qty")) or "1"
+        desc_str = get(r, "desc")
+        raw_mgr = get(r, "manager") or default_mgr
+        mgr_val = normalize_manager(raw_mgr, desc_str)
 
         supplier = get(r, "supplier") or "ספק כללי"
         contact = get(r, "contact")
@@ -1175,8 +1583,9 @@ def import_orders(conn, df):
         data = {
             "order_number": order_num,
             "line_number": line_num,
+            "order_manager": mgr_val,
             "part_number": part_num,
-            "item_description": get(r, "desc"),
+            "item_description": desc_str,
             "quantity": qty_num,
             "supplier_name": supplier,
             "contact_person": contact,
@@ -1212,7 +1621,6 @@ def import_orders(conn, df):
 
     conn.execute("""UPDATE orders SET supplier_status = COALESCE(NULLIF(internal_status, ''), 'טרם עודכן')
                     WHERE supplier_status = '' OR supplier_status IS NULL""")
-
     conn.execute("""UPDATE orders SET expected_date = due_date
                     WHERE (expected_date IS NULL OR TRIM(expected_date) = '') AND due_date != ''""")
 
@@ -1230,28 +1638,133 @@ def import_orders(conn, df):
                 WHERE access_keys.entity_name = orders.supplier_name AND access_keys.role='supplier')
             WHERE {order_col} = '' OR {order_col} IS NULL""")
     conn.commit()
+    log_security_event(conn, "טעינת אקסל VLOOKUP", actor_name, f"נטענו/סונכרנו {rows} שורות הזמנה.")
     return {"rows": rows, "contacts": contacts, "phones": phones}
 
 
-# ==================== 5ג. מסך ספק ====================
+# ---------- 6ה. לשונית אבטחה, בקרה, סיסמאות ספקים וגיבוי (Admin בלבד) ----------
+def render_security_admin_tab(conn, user):
+    st.markdown("##### 🔐 מרכז בקרת אבטחה, ניהול הרשאות ספקים ויומן אירועים (Admin בלבד)")
+
+    c_bkp1, c_bkp2 = st.columns([2, 1])
+    with c_bkp1:
+        st.info("📦 **גיבוי מערכת מלא בלחיצת כפתור:** מוריד קובץ Excel הכולל את כל ההזמנות, טבלת הספקים והסיסמאות, ויומן האבטחה המלא.")
+    with c_bkp2:
+        st.download_button(
+            "📥 הורד גיבוי מלא של כל מסד הנתונים (Full Backup)",
+            data=export_full_backup_excel(conn),
+            file_name=f"SAPakim_Full_Backup_{date.today().strftime('%d_%m_%Y')}.xlsx",
+            type="primary",
+            use_container_width=True,
+        )
+
+    st.divider()
+    st.markdown("###### 🔑 ניהול ספקים, איפוס סיסמאות, החלפת קישור ונעילת גישה (Kill Switch)")
+    df_keys = query_df(
+        conn,
+        """SELECT entity_name, contact_person, phone, access_key, custom_password, last_pwd_change, is_locked
+           FROM access_keys WHERE role='supplier' ORDER BY entity_name""",
+    )
+    if not df_keys.empty:
+        df_keys["phone"] = df_keys["phone"].apply(clean_display_phone)
+        df_keys["is_locked"] = df_keys["is_locked"].apply(lambda x: bool(int(x or 0)))
+
+        edited_keys = st.data_editor(
+            df_keys,
+            column_config={
+                "entity_name": st.column_config.TextColumn("חברה / ספק", disabled=True, width="medium"),
+                "contact_person": st.column_config.TextColumn("👤 איש קשר מורשה", width="medium"),
+                "phone": st.column_config.TextColumn("📞 טלפון לאימות כניסה", width="medium"),
+                "access_key": st.column_config.TextColumn("🔗 מפתח קישור (Magic Key)", disabled=True, width="small"),
+                "custom_password": st.column_config.TextColumn("🔑 סיסמת ספק אישית (ערוך לאיפוס)", width="medium"),
+                "last_pwd_change": st.column_config.TextColumn("🕒 מועד החלפת סיסמה", disabled=True, width="medium"),
+                "is_locked": st.column_config.CheckboxColumn("⛔ נעל גישת ספק", width="small"),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key="admin_keys_editor",
+        )
+
+        ck1, ck2 = st.columns(2)
+        with ck1:
+            if st.button("💾 שמור עדכוני סיסמאות, טלפונים ונעילות ספקים", type="primary", use_container_width=True):
+                now = datetime.now().strftime("%d/%m/%Y %H:%M")
+                for _, r in edited_keys.iterrows():
+                    conn.execute(
+                        """UPDATE access_keys
+                           SET contact_person=?, phone=?, custom_password=?, is_locked=?, last_pwd_change=?
+                           WHERE role='supplier' AND entity_name=?""",
+                        (
+                            clean_str(r["contact_person"]),
+                            clean_display_phone(r["phone"]),
+                            clean_str(r["custom_password"]),
+                            1 if r["is_locked"] else 0,
+                            now if clean_str(r["custom_password"]) else r["last_pwd_change"],
+                            r["entity_name"],
+                        ),
+                    )
+                conn.commit()
+                log_security_event(conn, "עדכון הרשאות ספקים", user["entity_name"], "עודכנו סיסמאות / נעילות בטבלת הספקים.")
+                st.success("הגדרות האבטחה והסיסמאות של הספקים נשמרו!")
+                st.rerun()
+
+        with ck2:
+            sup_to_regen = st.selectbox("בחר ספק להחלפת קישור (מבטל קישור ישן אם דלף):", df_keys["entity_name"].tolist())
+            if st.button("🔄 החלף קישור אישי (Regenerate Link) לספק זה", use_container_width=True):
+                new_k = regenerate_supplier_key(conn, sup_to_regen, user["entity_name"])
+                st.success(f"הקישור הישן בוטל! מפתח הקישור החדש של '{sup_to_regen}' הוא: {new_k}")
+                st.rerun()
+
+    st.divider()
+    st.markdown("###### 📜 יומן אירועי אבטחה והחלפות סיסמה (Audit Log)")
+    df_logs = query_df(conn, "SELECT event_time, event_type, actor_name, details, new_credential FROM security_logs ORDER BY id DESC LIMIT 100")
+    if df_logs.empty:
+        st.caption("אין אירועים מתועדים ביומן.")
+    else:
+        st.dataframe(
+            df_logs.rename(columns={
+                "event_time": "זמן אירוע",
+                "event_type": "סוג פעולה",
+                "actor_name": "מבצע הפעולה",
+                "details": "פירוט",
+                "new_credential": "סיסמה / מפתח חדש",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+# ---------- 6ו. מסך ספק (ללא איש קשר בשורות, תאריך מקורי נעול, ואפשרות החלפת סיסמה) ----------
 def render_supplier(conn, user):
     st.markdown(f"##### 📦 ההזמנות הפתוחות של: {user['entity_name']}")
     df = query_df(conn, "SELECT * FROM orders WHERE supplier_name=?", (user["entity_name"],))
     df["_line"] = pd.to_numeric(df["line_number"], errors="coerce")
     df = df.sort_values(["order_number", "_line"]).drop(columns="_line")
 
+    # אפשרות לספק להחליף סיסמה מתוך הפורטל שלו (שולח התראה למנהל המערכת)
+    with st.expander("🔑 הגדרות אבטחה: החלפת סיסמה אישית"):
+        sp1, sp2 = st.columns([2, 1])
+        new_sup_pwd = sp1.text_input("הגדר סיסמה אישית חדשה לחשבונך:", type="password", key="sup_self_pwd")
+        with sp2:
+            st.write("")
+            if st.button("שמור סיסמה חדשה 🔒", use_container_width=True):
+                if len(clean_str(new_sup_pwd)) < 4:
+                    st.warning("נא להזין סיסמה בת 4 תווים לפחות.")
+                else:
+                    update_supplier_password(conn, user["entity_name"], clean_str(new_sup_pwd), changed_by="החלפה עצמית בפורטל הספק")
+                    st.success("הסיסמה האישית שלך עודכנה בהצלחה!")
+
     if df.empty:
         st.warning("לא נמצאו הזמנות פתוחות המשויכות אליכם כרגע.")
         return
 
-    df = enrich_delay_columns(df)
+    df = enrich_orders_df(df)
 
     if st.session_state.submitted:
         render_done_screen(df)
         return
 
     with st.expander("⚡ עדכון מהיר אוטומטי לכל השורות (לחץ כאן להחלת סטטוס או הערה גורפת על כל ההזמנות)"):
-        st.caption("רוצים לעדכן סטטוס או הערה זהה לכל השורות שלכם בלחיצה אחת? בחרו כאן והמערכת תמלא אוטומטית:")
         b1, b2, b3 = st.columns([1.5, 2, 1])
         bulk_st = b1.selectbox("בחר סטטוס להחלה גורפת:", ["(ללא שינוי)"] + STATUS_OPTIONS, key="bulk_st_sel")
         bulk_nt = b2.text_input("הערה גורפת לכל השורות (אופציונלי):", placeholder="למשל: בייצור, יסופק במועד...", key="bulk_nt_inp")
@@ -1271,7 +1784,7 @@ def render_supplier(conn, user):
                     st.session_state[f"st_{r['id']}"] = new_s
                     st.session_state[f"nt_{r['id']}"] = new_n
                 conn.commit()
-                st.success("העדכון הוחל אוטומטית על כל השורות! ניתן לדייק שורות בודדות למטה וללחוץ על שמירה.")
+                st.success("העדכון הוחל אוטומטית על כל השורות!")
                 st.rerun()
 
     view = st.radio("בחר אופן תצוגה:", ["📱 תצוגת כרטיסיות (לנייד)", "💻 תצוגת טבלה מרוכזת (למחשב)"], horizontal=True)
@@ -1335,7 +1848,7 @@ def render_supplier_cards(df):
             default_picker_date = saved_exp_date or orig_due_date or date.today()
             with c_date:
                 eta_date = st.date_input(
-                    "📅 תאריך אספקה בתגובת ספק (נעול לתאריך המקורי עד לחיצה על 'שנה תאריך'):",
+                    "📅 תאריך אספקה בתגובת ספק:",
                     value=default_picker_date,
                     format="DD/MM/YYYY",
                     disabled=(not change_date or no_eta),
@@ -1446,27 +1959,38 @@ def render_done_screen(df):
         }),
         use_container_width=True, hide_index=True,
     )
-    st.info("טעיתם בפרט כלשהו? אפשר לחזור ולתקן, ולשלוח שוב.")
     if st.button("✏️ עריכת התשובות", type="primary", use_container_width=True):
         st.session_state.submitted = False
         st.rerun()
 
 
-# ==================== 6. main ====================
+# ==============================================================================
+# פרק 7: נקודת כניסה ראשית של האפליקציה (Main Entry Point)
+# ==============================================================================
 def run_app(conn):
     st.session_state.setdefault("user", None)
     st.session_state.setdefault("failed_attempts", 0)
     st.session_state.setdefault("submitted", False)
+    st.session_state.setdefault("link_verified", False)
+    st.session_state.setdefault("pending_admin_changes", None)
 
     url_key = st.query_params.get("key", "").strip().upper()
     if url_key and not st.session_state.user:
-        login_with_key(conn, url_key)
+        user_obj, _ = authenticate_user(conn, url_key)
+        if user_obj:
+            st.session_state.user = user_obj
+            # כניסה מקישור חיצוני של ספק דורשת אימות 4 ספרות אחרונות של טלפון איש הקשר!
+            st.session_state.link_verified = (user_obj["role"] != "supplier")
 
     if not st.session_state.user:
         render_login(conn)
         st.stop()
 
     user = st.session_state.user
+    if user["role"] == "supplier" and not st.session_state.link_verified:
+        render_link_verification_gate(conn, user)
+        st.stop()
+
     render_top_bar(conn, user)
     if user["role"] in ("admin", "mador"):
         render_staff(conn, user)
@@ -1489,4 +2013,5 @@ def main():
         conn.close()
 
 
-main()
+if __name__ == "__main__":
+    main()
