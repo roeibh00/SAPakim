@@ -3,15 +3,6 @@
 מערכת SAPakim - פורטל ארגוני מאובטח לניהול ותיקוף הזמנות חט"ל מול ספקים ומדורים
 פותח ע"י: רועי בן חור (Powered by BEN HUR)
 ================================================================================
-מבנה הקוד (ארכיטקטורה מודולרית להעברה נוחה למתכנת):
-- פרק 1: הגדרות מערכת, קבועים והרשאות שדות בצד השרת (Config & Server RBAC)
-- פרק 2: שכבת עיצוב ותצוגה מימין לשמאל (UI & RTL Styling)
-- פרק 3: שכבת אבטחת מידע, הצפנת scrypt והגנת קלט/אקסל (Security & Crypto Engine)
-- פרק 4: שכבת מסד הנתונים - Neon PostgreSQL / SQLite (Database Layer)
-- פרק 5: לוגיקה עסקית, מיזוג אקסל (VLOOKUP), קבצים מצורפים ווואטסאפ (Business Logic)
-- פרק 6: מסכי המערכת לפי הרשאות (Views: Login, Admin/Mador Dashboard, Supplier)
-- פרק 7: נקודת כניסה ראשית וניהול פג תוקף חיבור (Main Entry & Session Timeout)
-================================================================================
 """
 
 import hashlib
@@ -27,7 +18,6 @@ from io import BytesIO
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 try:
     import psycopg2
@@ -66,7 +56,6 @@ SUPPLIER_STATUS_OPTIONS = [
 
 ORDER_MANAGERS = ["נמ\"ר", "מרכבה", "איתן", "מנה\"ר", "כללי"]
 
-# אכיפת הרשאות שדות בצד השרת (תיקון #7 - מניעת דריסת שדות ספק ע"י מדור ולהפך)
 ROLE_ALLOWED_FIELDS = {
     "supplier": {"supplier_status", "expected_date", "supplier_note", "needs_attention"},
     "mador": {
@@ -94,7 +83,6 @@ GENERIC_PHRASES_TO_CLEAN = [
 # ==============================================================================
 
 def inject_custom_css():
-    """מזריק עיצוב אחיד, רשמי ומיושר לימין (RTL) לכלל רכיבי האתר."""
     st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap');
@@ -138,7 +126,7 @@ def inject_custom_css():
             text-align: center; font-size: 0.8rem; color: #64748b !important;
             margin-top: 2.5rem; font-weight: 600; letter-spacing: 0.5px;
         }
-        input, textarea, select, [data-testid="stDataFrame"], th, td {
+        input, textarea, select {
             direction: rtl !important;
             text-align: right !important;
             unicode-bidi: plaintext !important;
@@ -152,10 +140,6 @@ def inject_custom_css():
 # ==============================================================================
 
 def hash_secret(secret_text: str) -> str:
-    """
-    מצפין סיסמה או קוד PIN באמצעות scrypt עם Salt אקראי (תיקון #1 ו-#4).
-    לעולם לא שומר סיסמאות בטקסט גלוי.
-    """
     if not secret_text:
         return ""
     salt = secrets.token_bytes(16)
@@ -167,7 +151,6 @@ def hash_secret(secret_text: str) -> str:
 
 
 def verify_secret(secret_text: str, stored_hash: str) -> bool:
-    """מאמת סיסמה או PIN מול הגיבוב השמור במסד הנתונים."""
     if not secret_text or not stored_hash or not stored_hash.startswith("scrypt$"):
         return False
     try:
@@ -184,22 +167,16 @@ def verify_secret(secret_text: str, stored_hash: str) -> bool:
 
 
 def hash_token_fast(token_str: str) -> str:
-    """גיבוב SHA-256 מהיר לחיפוש אסימוני גישה של 128 ביט."""
     return hashlib.sha256(token_str.strip().encode("utf-8")).hexdigest()
 
 
 def safe_text(val) -> str:
-    """מנקה טקסט למניעת הזרקת HTML / XSS (תיקון #10 ו-#11)."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return ""
     return html.escape(str(val).strip())
 
 
 def sanitize_excel_value(val):
-    """
-    מונע הזרקת נוסחאות באקסל (CSV/Formula Injection - תיקון #12).
-    אם תא מתחיל ב- =, +, -, @ מוסיף גרש בודד בתחילתו.
-    """
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return ""
     s = str(val)
@@ -208,8 +185,14 @@ def sanitize_excel_value(val):
     return s
 
 
+def sanitize_dataframe_for_excel(df: pd.DataFrame) -> pd.DataFrame:
+    safe_df = df.copy()
+    for col in safe_df.columns:
+        safe_df[col] = safe_df[col].map(sanitize_excel_value)
+    return safe_df
+
+
 def validate_uploaded_file(uploaded_file) -> tuple[bool, str]:
-    """בודק סיומת, גודל קובץ (עד 5MB) וחתימת קובץ אמיתית (Magic Bytes)."""
     if not uploaded_file:
         return False, "לא נבחר קובץ."
     ext = os.path.splitext(uploaded_file.name)[1].lower()
@@ -234,7 +217,6 @@ def validate_uploaded_file(uploaded_file) -> tuple[bool, str]:
 # ==============================================================================
 
 def get_database_url() -> str:
-    """שולף את כתובת מסד הנתונים מ-Secrets או ממשתני הסביבה."""
     try:
         if "DATABASE_URL" in st.secrets:
             return st.secrets["DATABASE_URL"]
@@ -244,7 +226,6 @@ def get_database_url() -> str:
 
 
 class DBWrapper:
-    """מעטפת אחידה ל-Neon PostgreSQL ול-SQLite המקומי (כולל תיקון sqlite3.Row #15)."""
     def __init__(self):
         self.db_url = get_database_url()
         self.is_postgres = bool(self.db_url and HAS_PSYCOPG2)
@@ -283,13 +264,11 @@ class DBWrapper:
 
 
 def init_db():
-    """מקים את טבלאות המערכת המאובטחות ומזין חשבונות צוות מ-Secrets בלבד."""
     try:
         db = DBWrapper()
         id_serial = "SERIAL PRIMARY KEY" if db.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
         blob_type = "BYTEA" if db.is_postgres else "BLOB"
 
-        # 1. טבלת משתמשים וספקים (ללא סיסמאות גלויות)
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS users (
                 id {id_serial},
@@ -311,7 +290,6 @@ def init_db():
             )
         """)
 
-        # 2. טבלת הזמנות (כולל מחיקה רכה is_deleted ושיוך מנהל ההזמנה)
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS orders (
                 id {id_serial},
@@ -340,7 +318,6 @@ def init_db():
             )
         """)
 
-        # 3. טבלת קבצים מצורפים ושרטוטים (תיקון #11)
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS attachments (
                 id {id_serial},
@@ -353,7 +330,6 @@ def init_db():
             )
         """)
 
-        # 4. טבלת שרשור תגובות לכל שורה
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS order_comments (
                 id {id_serial},
@@ -365,7 +341,6 @@ def init_db():
             )
         """)
 
-        # 5. טבלת היסטוריית שינויים לשורה + יומן אבטחה (ללא חשיפת סיסמאות)
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id {id_serial},
@@ -378,7 +353,6 @@ def init_db():
             )
         """)
 
-        # טעינת מפתחות צוות מ-st.secrets (עם fallback בטוח לסביבת פיתוח מקומית)
         staff_secrets = {}
         try:
             if "staff_keys" in st.secrets:
@@ -405,13 +379,11 @@ def init_db():
         db.commit()
         db.close()
     except Exception:
-        # תיקון #13: מניעת הדפסת שגיאות מסד נתונים (st.code(str(exc))) למבקרים
         st.error("אירעה שגיאת תקשורת פנימית מול שרת הנתונים. נא לפנות למנהל המערכת.")
         st.stop()
 
 
 def log_audit(db: DBWrapper, actor_name: str, actor_role: str, action_type: str, details: str, order_ref: str = ""):
-    """מתעד פעולה ביומן הביקורת (לעולם לא רושם סיסמאות או מפתחות גלויים)."""
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     db.execute("""
         INSERT INTO audit_logs (timestamp, actor_name, actor_role, action_type, order_ref, details)
@@ -424,7 +396,6 @@ def log_audit(db: DBWrapper, actor_name: str, actor_role: str, action_type: str,
 # ==============================================================================
 
 def normalize_phone_display(val) -> str:
-    """מנרמל מספר טלפון לתצוגה תקנית (למשל 546966537 -> 0546966537)."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return ""
     s = re.sub(r"[^\d]", "", str(val).split(".")[0])
@@ -438,7 +409,6 @@ def normalize_phone_display(val) -> str:
 
 
 def normalize_phone_whatsapp(val) -> str:
-    """ממיר מספר טלפון לפורמט בינלאומי 972 לשליחת וואטסאפ."""
     disp = normalize_phone_display(val)
     if not disp or len(disp) < 9:
         return ""
@@ -448,7 +418,6 @@ def normalize_phone_whatsapp(val) -> str:
 
 
 def infer_order_manager(row_dict: dict) -> str:
-    """מזהה שיוך מדור אוטומטי מהאקסל או מתוך תיאור הפריט."""
     explicit = str(row_dict.get("מנהל ההזמנה", "") or row_dict.get("מדור", "")).strip()
     for m in ORDER_MANAGERS:
         if m in explicit:
@@ -464,7 +433,6 @@ def infer_order_manager(row_dict: dict) -> str:
 
 
 def calc_delay_days(due_date_str: str, supplier_status: str) -> tuple[int, str]:
-    """מחשב בזמן אמת את הפרש הימים מול תאריך היעד המקורי."""
     if supplier_status == "סופק":
         return 0, "🟢 סופק"
     if not due_date_str:
@@ -482,7 +450,6 @@ def calc_delay_days(due_date_str: str, supplier_status: str) -> tuple[int, str]:
 
 
 def ensure_supplier_account(db: DBWrapper, supplier_name: str, contact_person: str, phone: str):
-    """מוודא שלכל ספק מהאקסל קיים חשבון ממודר בטבלת users."""
     clean_name = safe_text(supplier_name)
     if not clean_name:
         return
@@ -490,7 +457,7 @@ def ensure_supplier_account(db: DBWrapper, supplier_name: str, contact_person: s
     if not existing:
         initial_pwd = secrets.token_urlsafe(6)
         initial_pin = f"{secrets.randbelow(900000) + 100000}"
-        raw_token = secrets.token_hex(16)  # 128-bit token
+        raw_token = secrets.token_hex(16)
         exp = (datetime.now() + timedelta(days=TOKEN_EXPIRY_DAYS)).strftime("%Y-%m-%d")
         db.execute("""
             INSERT INTO users (
@@ -514,13 +481,9 @@ def ensure_supplier_account(db: DBWrapper, supplier_name: str, contact_person: s
 
 
 def issue_new_supplier_credentials(db: DBWrapper, supplier_name: str, actor_name: str) -> dict:
-    """
-    מנפיק לספק סיסמה זמנית חד-פעמית, קוד PIN נפרד בן 6 ספרות ואסימון 128-ביט עם תוקף.
-    מחזיר אותם למנהל פעם אחת בלבד על המסך (תיקונים #1, #2, #3, #4, #6).
-    """
     temp_password = f"SUP-{secrets.token_hex(3).upper()}"
     new_pin = f"{secrets.randbelow(900000) + 100000}"
-    raw_token = secrets.token_hex(16)  # 128-bit
+    raw_token = secrets.token_hex(16)
     expires_at = (datetime.now() + timedelta(days=TOKEN_EXPIRY_DAYS)).strftime("%Y-%m-%d")
 
     db.execute("""
@@ -542,10 +505,6 @@ def issue_new_supplier_credentials(db: DBWrapper, supplier_name: str, actor_name
 
 
 def build_whatsapp_message(supplier_name: str, contact_person: str, orders_list: list[dict], portal_url: str, raw_token: str = "") -> str:
-    """
-    בונה הודעת וואטסאפ תקנית לספק.
-    תיקון קריטי #2: לעולם לא מדביק את ה-PIN או הסיסמה בתוך הודעת הוואטסאפ!
-    """
     greeting_name = f"{contact_person} ({supplier_name})" if contact_person else supplier_name
     lines_text = []
     for o in orders_list[:12]:
@@ -555,12 +514,12 @@ def build_whatsapp_message(supplier_name: str, contact_person: str, orders_list:
     if len(orders_list) > 12:
         lines_text.append(f"...ועוד {len(orders_list) - 12} שורות נוספות בפורטל.")
 
-    link_To_send = f"{portal_url}/?token={raw_token}" if raw_token else portal_url
+    link_to_send = f"{portal_url}/?token={raw_token}" if raw_token else portal_url
     msg = (
         f"שלום {greeting_name},\n"
         f"בהמשך למעקב הזמנות חט\"ל, להלן ההזמנות הפתוחות הממתינות לעדכון סטטוס וצפי אספקה:\n\n"
         + "\n".join(lines_text) +
-        f"\n\nלכניסה מאובטחת לפורטל ועדכון ישיר:\n{link_To_send}\n"
+        f"\n\nלכניסה מאובטחת לפורטל ועדכון ישיר:\n{link_to_send}\n"
         f"(הכניסה באמצעות שם הספק והסיסמה האישית שלך, או באמצעות קוד ה-PIN שנמסר לך בנפרד).\n"
         f"תודה על שיתוף הפעולה."
     )
@@ -572,13 +531,6 @@ def build_whatsapp_message(supplier_name: str, contact_person: str, orders_list:
 # ==============================================================================
 
 def render_login_view(db: DBWrapper):
-    """
-    מסך התחברות מאובטח:
-    - ללא רשימת ספקים פומבית וללא איפוס סיסמה עצמי (תיקון #3)
-    - כניסת ספק באמצעות שם ספק + סיסמה (תיקון #2)
-    - תמיכה בקישור 128-ביט + אימות PIN אקראי נפרד (תיקון #4)
-    - נעילת חשבון בצד השרת לאחר 5 ניסיונות כושלים (תיקון #6)
-    """
     st.markdown("""
         <div class="header-box" style="text-align:center;">
             <div class="header-title">🛡️ פורטל SAPakim - מערכת הזמנות חט"ל</div>
@@ -590,7 +542,6 @@ def render_login_view(db: DBWrapper):
 
     col_spacer1, col_main, col_spacer2 = st.columns([1, 1.6, 1])
     with col_main:
-        # מסלול א': כניסה דרך קישור טוקן 128-ביט (דורש קוד PIN נפרד שלא נשלח בהודעה)
         if url_token:
             token_user = db.fetchone(
                 "SELECT * FROM users WHERE token_hash = ? AND role = 'supplier'",
@@ -605,7 +556,6 @@ def render_login_view(db: DBWrapper):
                     _process_auth_attempt(db, token_user, pin_input, is_pin=True)
                 st.divider()
 
-        # מסלול ב': כניסה רגילה (שם ספק / שם משתמש צוות + סיסמה)
         st.markdown("#### 🔑 כניסה באמצעות מזהה וסיסמה")
         identifier = st.text_input("שם ספק (כפי שמופיע בהזמנה) או שם משתמש צוות:").strip()
         password = st.text_input("סיסמה / מפתח גישה סודי:", type="password").strip()
@@ -619,17 +569,26 @@ def render_login_view(db: DBWrapper):
                     (identifier, identifier)
                 )
                 if not user_row:
-                    log_audit(db, identifier, "unknown", "LOGIN_FAIL", "ניסיון התחברות עם מזהה לא קיים")
-                    db.commit()
-                    st.error("פרטי ההזדהות שגויים.")
+                    # גיבוי נוח: אם המשתמש הקליד את המפתח בשדה הסיסמה תחת שם התפקיד
+                    staff_candidates = db.fetchall("SELECT * FROM users WHERE role IN ('admin', 'mador')")
+                    matched_staff = None
+                    for sc in staff_candidates:
+                        if verify_secret(password, sc["password_hash"]):
+                            matched_staff = sc
+                            break
+                    if matched_staff:
+                        _process_auth_attempt(db, matched_staff, password, is_pin=False)
+                    else:
+                        log_audit(db, identifier, "unknown", "LOGIN_FAIL", "ניסיון התחברות עם מזהה לא קיים")
+                        db.commit()
+                        st.error("פרטי ההזדהות שגויים.")
                 else:
                     _process_auth_attempt(db, user_row, password, is_pin=False)
 
-        st.caption("שכחת סיסמה או קוד PIN? מטעמי אבטחת מידע, איפוס מתבצע אך ורק מול מנהל המערכת בחט\"ל.")
+        st.caption("עבור צוות חט\"ל: ניתן להזין בשדה המזהה `admin` / `namer` / `merkava` / `eitan` / `manhar` ואת מפתח הגישה בסיסמה.")
 
 
 def _process_auth_attempt(db: DBWrapper, user_row: dict, secret_input: str, is_pin: bool):
-    """בודק נעילת חשבון בשרת, מאמת סיסמה/PIN ומנהל מונה ניסיונות כושלים בשרת."""
     now = datetime.now()
 
     if user_row.get("is_locked") == 1:
@@ -679,8 +638,7 @@ def _process_auth_attempt(db: DBWrapper, user_row: dict, secret_input: str, is_p
         st.error(f"פרטי ההזדהות שגויים (ניסיון {fails} מתוך {MAX_LOGIN_ATTEMPTS}).")
 
 
-def render_Attachments_and_comments_widget(db: DBWrapper, order_row: dict, user: dict):
-    """רכיב שרשור תגובות והעלאת/הורדת קבצים מצורפים מאומתים לכל שורת הזמנה."""
+def render_attachments_and_comments_widget(db: DBWrapper, order_row: dict, user: dict):
     oid = order_row["id"]
     order_ref = f"{order_row['order_number']}/{order_row['line_number']}"
 
@@ -726,7 +684,6 @@ def render_Attachments_and_comments_widget(db: DBWrapper, order_row: dict, user:
             st.caption("לא צורפו מסמכים לשורה זו.")
         else:
             for att in att_rows:
-                # הורדה מאומתת לפי הרשאת הזמנה בלבד
                 full_att = db.fetchone("SELECT file_data FROM attachments WHERE id = ?", (att["id"],))
                 if full_att and full_att.get("file_data") is not None:
                     raw_bytes = bytes(full_att["file_data"])
@@ -759,10 +716,8 @@ def render_Attachments_and_comments_widget(db: DBWrapper, order_row: dict, user:
 
 
 def render_supplier_portal(db: DBWrapper, user: dict):
-    """מסך הספק הממודר: מציג אך ורק את הזמנות הספק, עם שדות ליבה נעולים בשרת."""
     sup_name = user["entity_name"]
 
-    # בדיקה אם הספק נדרש להחליף סיסמה זמנית שהונפקה ע"י המנהל
     if user.get("must_change_password") == 1:
         st.warning("🔐 זוהי כניסה עם סיסמה זמנית. אנא בחר כעת סיסמה אישית חדשה (לפחות 6 תווים):")
         new_p1 = st.text_input("סיסמה אישית חדשה:", type="password")
@@ -788,7 +743,6 @@ def render_supplier_portal(db: DBWrapper, user: dict):
         st.info("אין כרגע הזמנות פתוחות המשויכות לחשבונך.")
         return
 
-    # סרגל החלה מהירה על כל השורות של הספק
     with st.expander("⚡ עדכון מהיר וגורף לכל השורות שלי", expanded=False):
         c1, c2, c3 = st.columns([1, 1.5, 1])
         bulk_status = c1.selectbox("בחר סטטוס להחלה גורפת:", SUPPLIER_STATUS_OPTIONS, key="bulk_sup_stat")
@@ -810,7 +764,7 @@ def render_supplier_portal(db: DBWrapper, user: dict):
 
     st.markdown(f"### 📦 ההזמנות הפתוחות שלי ({len(orders)} שורות)")
     for o in orders:
-         _, delay_badge = calc_delay_days(o["due_date"], o["supplier_status"])
+        _, delay_badge = calc_delay_days(o["due_date"], o["supplier_status"])
         title = (
             f"הזמנה {o['order_number']} | שורה {o['line_number']} | "
             f"מק\"ט: {o['part_number']} - {o['item_description']} | {delay_badge}"
@@ -831,7 +785,6 @@ def render_supplier_portal(db: DBWrapper, user: dict):
                 key=f"s_stat_{o['id']}"
             )
 
-            # תאריך יעד מקורי נעול כברירת מחדל עד לחיצה על "שנה תאריך אספקה"
             default_exp = o["expected_date"] or o["due_date"] or ""
             change_date = col2.checkbox("📅 שנה תאריך אספקה", key=f"chg_dt_{o['id']}")
             if change_date:
@@ -860,15 +813,13 @@ def render_supplier_portal(db: DBWrapper, user: dict):
                 st.rerun()
 
             st.divider()
-            render_Attachments_and_comments_widget(db, o, user)
+            render_attachments_and_comments_widget(db, o, user)
 
 
 def render_staff_dashboard(db: DBWrapper, user: dict):
-    """מסך הניהול למדורים ולמנהל המערכת (כולל מידור מדורים, שמירה דיפרנציאלית ודשבורד מפקד)."""
     role = user["role"]
     scope = user.get("order_manager_scope", "ALL")
 
-    # התראות אבטחה בראש מסך המנהל (איפוסים/החלפות סיסמה וניסיונות כושלים)
     if role == "admin":
         sec_alerts = db.fetchall("""
             SELECT timestamp, actor_name, action_type, details
@@ -881,7 +832,6 @@ def render_staff_dashboard(db: DBWrapper, user: dict):
                 for a in sec_alerts:
                     st.markdown(f"- `{a['timestamp']}` | **{a['actor_name']}** ({a['action_type']}): {a['details']}")
 
-    # שליפת הזמנות לפי הרשאת המדור (מידור אוטומטי - תיקון #7 ו-#8)
     if role == "admin" or scope == "ALL":
         all_orders = db.fetchall("SELECT * FROM orders WHERE is_deleted = 0 ORDER BY order_number, line_number")
     else:
@@ -890,7 +840,6 @@ def render_staff_dashboard(db: DBWrapper, user: dict):
             (scope,)
         )
 
-    # חישוב מדדי KPI ועמודת פיגור בימים
     total_rows = len(all_orders)
     delayed_days_list = []
     updated_this_week = 0
@@ -935,33 +884,26 @@ def render_staff_dashboard(db: DBWrapper, user: dict):
         "🔐 ניהול ספקים, מחיקה רכה וגיבוי"
     ])
 
-    # --- לשונית 1: טבלת הזמנות ושמירה דיפרנציאלית ---
     with tabs[0]:
         _render_tab_orders_table(db, user, all_orders)
 
-    # --- לשונית 2: שרטוטים, שרשור תגובות והיסטוריית שורה ---
     with tabs[1]:
         _render_tab_attachments_and_history(db, user, all_orders)
 
-    # --- לשונית 3: וואטסאפ ותזכורות לספקים שלא עדכנו מעל X ימים ---
     with tabs[2]:
         _render_tab_whatsapp(db, user, all_orders)
 
-    # --- לשונית 4: טעינת אקסל לפי מדור עם תצוגה מקדימה ---
     with tabs[3]:
         _render_tab_excel_upload(db, user)
 
-    # --- לשונית 5: דשבורד מפקד ודוח שבועי ---
     with tabs[4]:
         _render_tab_commander_dashboard(db, all_orders)
 
-    # --- לשונית 6: ניהול סיסמאות ספקים, מחיקה רכה וגיבוי ---
     with tabs[5]:
         _render_tab_security_and_backup(db, user, all_orders)
 
 
 def _render_tab_orders_table(db: DBWrapper, user: dict, all_orders: list[dict]):
-    """מציג את טבלת ההזמנות עם אכיפת הרשאות שדות בצד השרת ושמירה דיפרנציאלית (תיקונים #7 ו-#10)."""
     role = user["role"]
     if not all_orders:
         st.info("אין הזמנות להצגה. ניתן לטעון קובץ אקסל בלשונית 'טעינת אקסל'.")
@@ -992,7 +934,6 @@ def _render_tab_orders_table(db: DBWrapper, user: dict, all_orders: list[dict]):
     ]
     df_view = df_view[[c for c in display_cols if c in df_view.columns]]
 
-    # נעילת עמודות לפי תפקיד (למדור נעולות עמודות הספק; למנהל הכל פתוח עם חלונית אישור)
     allowed_for_role = ROLE_ALLOWED_FIELDS.get(role, set())
     disabled_cols = [c for c in df_view.columns if c not in allowed_for_role]
 
@@ -1004,7 +945,6 @@ def _render_tab_orders_table(db: DBWrapper, user: dict, all_orders: list[dict]):
         key="main_orders_editor"
     )
 
-    # חישוב שינויים דיפרנציאליים (Delta) בלבד - תיקון #7 ו-#10
     changes = []
     orig_map = {row["id"]: row for row in filtered}
     for _, erow in edited_df.iterrows():
@@ -1029,7 +969,6 @@ def _render_tab_orders_table(db: DBWrapper, user: dict, all_orders: list[dict]):
             now_s = datetime.now().strftime("%d/%m/%Y %H:%M")
             for ch in changes:
                 field = ch["field"]
-                # בדיקת Whitelist קשיחה בצד השרת
                 if field not in ROLE_ALLOWED_FIELDS.get(role, set()):
                     continue
                 val = int(ch["new"] == "True" or ch["new"] == "1") if field == "needs_attention" else safe_text(ch["new"])
@@ -1042,12 +981,9 @@ def _render_tab_orders_table(db: DBWrapper, user: dict, all_orders: list[dict]):
             st.success("השינויים נשמרו בהצלחה ללא דריסת שדות מקבילים!")
             st.rerun()
 
-    # ייצוא לאקסל עם הגנה מפני הזרקת נוסחאות (תיקון #12)
     if st.button("📥 הורד דוח מאוחד ומוגן ל-Excel"):
         out = BytesIO()
-        safe_df = df_view.copy()
-        for col in safe_df.columns:
-            safe_df[col] = safe_df[col].apply(sanitize_excel_value)
+        safe_df = sanitize_dataframe_for_excel(df_view)
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
             safe_df.to_excel(writer, index=False, sheet_name="Orders_Report")
         st.download_button(
@@ -1059,7 +995,6 @@ def _render_tab_orders_table(db: DBWrapper, user: dict, all_orders: list[dict]):
 
 
 def _render_tab_attachments_and_history(db: DBWrapper, user: dict, all_orders: list[dict]):
-    """ניהול מסמכים מצורפים (שרטוטים/מפרטים), שרשור תגובות והיסטוריית שינויים לשורה."""
     if not all_orders:
         st.info("אין הזמנות פעילות.")
         return
@@ -1071,7 +1006,7 @@ def _render_tab_attachments_and_history(db: DBWrapper, user: dict, all_orders: l
     selected_label = st.selectbox("בחר שורת הזמנה לצפייה בשרשור תגובות, העלאת שרטוט או היסטוריית שינויים:", list(options_map.keys()))
     selected_order = options_map[selected_label]
 
-    render_Attachments_and_comments_widget(db, selected_order, user)
+    render_attachments_and_comments_widget(db, selected_order, user)
     st.divider()
     st.markdown("#### 📜 היסטוריית שינויים מלאה לשורה זו (Row Audit Trail)")
     ref = f"{selected_order['order_number']}/{selected_order['line_number']}"
@@ -1083,11 +1018,10 @@ def _render_tab_attachments_and_history(db: DBWrapper, user: dict, all_orders: l
 
 
 def _render_tab_whatsapp(db: DBWrapper, user: dict, all_orders: list[dict]):
-    """מרכז שיגור וואטסאפ + סינון ספקים שלא עדכנו מעל X ימים (ללא חשיפת PIN בהודעה)."""
     st.markdown("#### 📲 שיגור הודעות ותזכורות וואטסאפ לספקים")
     c1, c2 = st.columns([1, 1])
     stale_days = c1.number_input("סנן ספקים שלא עדכנו סטטוס מעל X ימים (0 = כל הספקים הפתוחים):", min_value=0, max_value=90, value=0)
-    portal_url = c2.text_input("כתובת הפורטל לשליחה:", value="https://sapakim-portal.streamlit.app")
+    portal_url = c2.text_input("כתובת הפורטל לשליחה:", value="https://sapakim.streamlit.app")
 
     open_orders = [o for o in all_orders if o["supplier_status"] != "סופק"]
     now_dt = datetime.now()
@@ -1136,7 +1070,6 @@ def _render_tab_whatsapp(db: DBWrapper, user: dict, all_orders: list[dict]):
 
 
 def _render_tab_excel_upload(db: DBWrapper, user: dict):
-    """טעינת אקסל ממודרת לפי מדור עם תצוגה מקדימה לפני כתיבה למסד (תיקונים #8 ו-#9)."""
     role = user["role"]
     scope = user.get("order_manager_scope", "ALL")
     st.markdown(f"#### 📥 טעינת קובץ אקסל (הרשאת טעינה נוכחית: `{scope}`)")
@@ -1164,7 +1097,6 @@ def _render_tab_excel_upload(db: DBWrapper, user: dict):
             continue
 
         mgr = infer_order_manager(r_dict)
-        # אכיפת מידור טעינת אקסל: מדור יכול לטעון אך ורק שורות של המדור שלו (תיקון #8)
         if role != "admin" and scope != "ALL" and mgr != scope:
             skipped_by_scope += 1
             continue
@@ -1212,7 +1144,6 @@ def _render_tab_excel_upload(db: DBWrapper, user: dict):
                         pr["supplier_phone"], pr["due_date"], pr["internal_status"], pr["supplier_note_excel"], now_s
                     ))
                 else:
-                    # מיזוג חכם (VLOOKUP) ללא דריסת תשובות ספק או מענה מדור קיימים
                     db.execute("""
                         UPDATE orders
                         SET order_manager = ?, part_number = ?, item_description = ?, quantity = ?,
@@ -1236,7 +1167,6 @@ def _render_tab_excel_upload(db: DBWrapper, user: dict):
 
 
 def _render_tab_commander_dashboard(db: DBWrapper, all_orders: list[dict]):
-    """דשבורד מפקד ודוח שבועי לפי מדור ולפי ספק."""
     st.markdown("#### 🎖️ דשבורד מפקד ודוח ביצועים שבועי")
     if not all_orders:
         st.info("אין נתונים להצגה.")
@@ -1268,7 +1198,6 @@ def _render_tab_commander_dashboard(db: DBWrapper, all_orders: list[dict]):
 
 
 def _render_tab_security_and_backup(db: DBWrapper, user: dict, all_orders: list[dict]):
-    """ניהול סיסמאות ספקים ע"י מנהל בלבד, מחיקה רכה (Soft Delete) וגיבוי מערכת נקי מסיסמאות."""
     if user["role"] != "admin":
         st.warning("לשונית זו מיועדת למנהל המערכת (Admin) בלבד.")
         return
@@ -1287,7 +1216,7 @@ def _render_tab_security_and_backup(db: DBWrapper, user: dict, all_orders: list[
                 f"סיסמה זמנית חד-פעמית: {creds['temp_password']}\n"
                 f"קוד PIN נפרד (אל תשלח יחד עם הקישור!): {creds['pin']}\n"
                 f"קישור 128-ביט (בתוקף עד {creds['expires_at']}):\n"
-                f"https://sapakim-portal.streamlit.app/?token={creds['raw_token']}",
+                f"https://sapakim.streamlit.app/?token={creds['raw_token']}",
                 language="text"
             )
 
@@ -1302,7 +1231,7 @@ def _render_tab_security_and_backup(db: DBWrapper, user: dict, all_orders: list[
             st.rerun()
 
     st.divider()
-    st.markdown("#### 🗑️ מחיקה רכה (Soft Delete) ושחזור הזמנות (מותנה בקבלת מענה ספק - תיקון #9)")
+    st.markdown("#### 🗑️ מחיקה רכה (Soft Delete) ושחזור הזמנות (מותנה בקבלת מענה ספק)")
     eligible_for_delete = [
         o for o in all_orders
         if (o.get("supplier_status") and o["supplier_status"] != "טרם עודכן") or o.get("supplier_note")
@@ -1332,14 +1261,14 @@ def _render_tab_security_and_backup(db: DBWrapper, user: dict, all_orders: list[
             st.rerun()
 
     st.divider()
-    st.markdown("#### 💾 גיבוי מערכת מלא ל-Excel (ללא חשיפת סיסמאות או אסימונים - תיקון #1 ו-#4)")
+    st.markdown("#### 💾 גיבוי מערכת מלא ל-Excel (ללא חשיפת סיסמאות או אסימונים)")
     if st.button("📦 הפק קובץ גיבוי מערכת מלא (Orders + Users Metadata + Audit Log)"):
         out = BytesIO()
-        orders_df = pd.DataFrame(db.fetchall("SELECT * FROM orders")).applymap(sanitize_excel_value)
-        users_df = pd.DataFrame(db.fetchall(
+        orders_df = sanitize_dataframe_for_excel(pd.DataFrame(db.fetchall("SELECT * FROM orders")))
+        users_df = sanitize_dataframe_for_excel(pd.DataFrame(db.fetchall(
             "SELECT id, username, role, entity_name, order_manager_scope, contact_person, phone, is_locked, last_login FROM users"
-        )).applymap(sanitize_excel_value)
-        logs_df = pd.DataFrame(db.fetchall("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 2000")).applymap(sanitize_excel_value)
+        )))
+        logs_df = sanitize_dataframe_for_excel(pd.DataFrame(db.fetchall("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 2000")))
 
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
             orders_df.to_excel(writer, index=False, sheet_name="Orders")
@@ -1368,7 +1297,6 @@ def main():
     if "last_activity" not in st.session_state:
         st.session_state.last_activity = datetime.now()
 
-    # אכיפת ניתוק אוטומטי לאחר חוסר פעילות (תיקון #5 ו-#14)
     if st.session_state.user:
         elapsed = (datetime.now() - st.session_state.last_activity).total_seconds() / 60.0
         if elapsed > SESSION_TIMEOUT_MINUTES:
