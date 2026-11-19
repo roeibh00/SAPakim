@@ -7,7 +7,7 @@
 - פרק 1: הגדרות מערכת, רשימת מנהלי הזמנה והרשאות שדות בצד השרת (Config & RBAC)
 - פרק 2: שכבת עיצוב רספונסיבית למחשב ולטלפון הנייד (Responsive Mobile-First RTL CSS)
 - פרק 3: שכבת אבטחת מידע, הצפנת scrypt והגנת קלט/אקסל (Security & Crypto Engine)
-- פרק 4: שכבת מסד הנתונים - Neon PostgreSQL / SQLite (Database Layer)
+- פרק 4: שכבת מסד הנתונים - Neon PostgreSQL / SQLite + מיגרציה אוטומטית (Database Layer)
 - פרק 5: לוגיקה עסקית, מיזוג אקסל (VLOOKUP), קבצים מצורפים ווואטסאפ (Business Logic)
 - פרק 6: מסכי המערכת לפי הרשאות (Login, Supplier, Staff - Mobile & Desktop)
 - פרק 7: נקודת כניסה ראשית וניהול פג תוקף חיבור (Main Entry & Session Timeout)
@@ -17,6 +17,7 @@
 import hashlib
 import hmac
 import html
+import logging
 import os
 import re
 import secrets
@@ -53,7 +54,7 @@ LOCKOUT_MINUTES = 30
 TOKEN_EXPIRY_DAYS = 14
 MAX_ATTACHMENT_SIZE_MB = 5
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".xlsx"}
-DEFAULT_PORTAL_URL = "https://sapakim.streamlit.app"
+DEFAULT_PORTAL_URL = "https://sapakim-kukmcxaux8yf9tfjrygif9.streamlit.app"
 
 SUPPLIER_STATUS_OPTIONS = [
     "טרם עודכן",
@@ -78,7 +79,7 @@ MANAGER_ALLOWED_FIELDS = {
 ROLE_ALLOWED_FIELDS = {
     "supplier": {"supplier_status", "expected_date", "supplier_note", "needs_attention"},
     "manager": MANAGER_ALLOWED_FIELDS,
-    "mador": MANAGER_ALLOWED_FIELDS,  # תאימות לאחור לרשומות ישנות
+    "mador": MANAGER_ALLOWED_FIELDS,  # תאימות לאחור
     "admin": {
         "order_manager", "order_number", "line_number", "part_number",
         "item_description", "quantity", "supplier_name", "contact_person",
@@ -305,7 +306,7 @@ def validate_uploaded_file(uploaded_file) -> tuple[bool, str]:
 
 
 # ==============================================================================
-# פרק 4: שכבת מסד הנתונים - Neon PostgreSQL / SQLite (Database Layer)
+# פרק 4: שכבת מסד הנתונים - Neon PostgreSQL / SQLite + מיגרציה (Database Layer)
 # ==============================================================================
 
 def get_database_url() -> str:
@@ -350,6 +351,26 @@ class DBWrapper:
         row = cur.fetchone()
         return dict(row) if row is not None else None
 
+    def ensure_columns(self, table_name: str, columns_spec: list[tuple[str, str]]):
+        """
+        מוסיף בבטחה עמודות חדשות לטבלאות קיימות ב-Neon או ב-SQLite ללא מחיקת נתונים.
+        פותר קריסות מיגרציה כאשר עוברים מגרסה קודמת של האתר לגרסה החדשה.
+        """
+        if self.is_postgres:
+            for col_name, col_def in columns_spec:
+                self.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_def}")
+        else:
+            existing_cols = {row["name"] for row in self.fetchall(f"PRAGMA table_info({table_name})")}
+            for col_name, col_def in columns_spec:
+                if col_name not in existing_cols:
+                    self.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}")
+
+    def rollback(self):
+        try:
+            self.conn.rollback()
+        except Exception:
+            pass
+
     def commit(self):
         self.conn.commit()
 
@@ -360,15 +381,17 @@ class DBWrapper:
 @st.cache_resource
 def init_db() -> bool:
     """
-    מקים את טבלאות המערכת ומסנכרן את חשבונות הצוות מ-st.secrets פעם אחת בלבד בעליית השרת
-    (חוסך שעות חישוב ב-Neon ומאיץ משמעותית את תגובתיות האתר).
+    מקים טבלאות, מבצע מיגרציה אוטומטית לעמודות חדשות בטבלאות קיימות ב-Neon,
+    ומסנכרן את חשבונות הצוות מ-st.secrets פעם אחת בעליית השרת.
     """
     db = None
+    stage = "DB_CONNECT"
     try:
         db = DBWrapper()
         id_serial = "SERIAL PRIMARY KEY" if db.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
         blob_type = "BYTEA" if db.is_postgres else "BLOB"
 
+        stage = "CREATE_TABLES"
         db.execute(f"""
             CREATE TABLE IF NOT EXISTS users (
                 id {id_serial},
@@ -453,10 +476,54 @@ def init_db() -> bool:
             )
         """)
 
-        # הסרת חשבונות המדורים הישנים מהגרסה הקודמת והעברת הזמנות ישנות ל'כללי' אם לא שויכו לשם מנהל
-        db.execute("DELETE FROM users WHERE username IN ('namer', 'merkava', 'eitan', 'manhar')")
-        db.execute("UPDATE orders SET order_manager = 'כללי' WHERE order_manager NOT IN ('שגיא', 'פיראס', 'סאקר', 'אדי', 'כללי')")
+        # מיגרציה אוטומטית לטבלאות שכבר קיימות ב-Neon מהגרסאות הקודמות (ללא מחיקת נתונים)
+        stage = "MIGRATE_COLUMNS"
+        db.ensure_columns("orders", [
+            ("order_manager", "TEXT DEFAULT 'כללי'"),
+            ("contact_person", "TEXT DEFAULT ''"),
+            ("supplier_phone", "TEXT DEFAULT ''"),
+            ("internal_status", "TEXT DEFAULT ''"),
+            ("last_supplier_update", "TEXT DEFAULT ''"),
+            ("is_deleted", "INTEGER DEFAULT 0"),
+            ("deleted_at", "TEXT DEFAULT ''"),
+            ("deleted_by", "TEXT DEFAULT ''"),
+        ])
 
+        db.ensure_columns("users", [
+            ("order_manager_scope", "TEXT DEFAULT 'ALL'"),
+            ("pin_hash", "TEXT DEFAULT ''"),
+            ("token_hash", "TEXT DEFAULT ''"),
+            ("token_expires_at", "TEXT DEFAULT ''"),
+            ("contact_person", "TEXT DEFAULT ''"),
+            ("phone", "TEXT DEFAULT ''"),
+            ("is_locked", "INTEGER DEFAULT 0"),
+            ("failed_attempts", "INTEGER DEFAULT 0"),
+            ("locked_until", "TEXT DEFAULT ''"),
+            ("must_change_password", "INTEGER DEFAULT 0"),
+            ("last_login", "TEXT DEFAULT ''"),
+        ])
+
+        db.ensure_columns("audit_logs", [
+            ("order_ref", "TEXT DEFAULT ''"),
+        ])
+
+        stage = "NORMALIZE_DATA"
+        db.execute("DELETE FROM users WHERE username IN ('namer', 'merkava', 'eitan', 'manhar')")
+        db.execute("UPDATE orders SET order_manager = 'כללי' WHERE order_manager IS NULL OR order_manager NOT IN ('שגיא', 'פיראס', 'סאקר', 'אדי', 'כללי')")
+        db.execute("UPDATE orders SET is_deleted = 0 WHERE is_deleted IS NULL")
+        db.execute("UPDATE orders SET needs_attention = 0 WHERE needs_attention IS NULL")
+
+        # יצירת חשבונות אוטומטית לספקים שכבר שמורים ב-Neon מהגרסה הקודמת
+        existing_suppliers = db.fetchall("""
+            SELECT supplier_name, MAX(contact_person) AS contact_person, MAX(supplier_phone) AS supplier_phone
+            FROM orders
+            WHERE supplier_name IS NOT NULL AND TRIM(supplier_name) != ''
+            GROUP BY supplier_name
+        """)
+        for sup in existing_suppliers:
+            ensure_supplier_account(db, sup["supplier_name"], sup.get("contact_person", ""), sup.get("supplier_phone", ""))
+
+        stage = "SYNC_STAFF"
         staff_secrets = {}
         try:
             if "staff_keys" in st.secrets:
@@ -488,7 +555,10 @@ def init_db() -> bool:
         db.commit()
         return True
     except Exception:
-        st.error("אירעה שגיאת תקשורת פנימית מול שרת הנתונים. נא לפנות למנהל המערכת.")
+        if db is not None:
+            db.rollback()
+        logging.exception(f"init_db failed at stage: {stage}")
+        st.error(f"אירעה שגיאת תקשורת פנימית מול שרת הנתונים [שלב: {stage}]. נא לפנות למנהל המערכת או לבדוק את Manage app -> Logs.")
         st.stop()
     finally:
         if db is not None:
@@ -569,6 +639,9 @@ def ensure_supplier_account(db: DBWrapper, supplier_name: str, contact_person: s
         return
     existing = db.fetchone("SELECT id FROM users WHERE role = 'supplier' AND entity_name = ?", (clean_name,))
     if not existing:
+        uname = clean_name
+        if db.fetchone("SELECT id FROM users WHERE username = ?", (uname,)):
+            uname = f"{clean_name}_{secrets.token_hex(2)}"
         initial_pwd = secrets.token_urlsafe(6)
         initial_pin = f"{secrets.randbelow(900000) + 100000}"
         raw_token = secrets.token_hex(16)
@@ -580,7 +653,7 @@ def ensure_supplier_account(db: DBWrapper, supplier_name: str, contact_person: s
                 contact_person, phone, must_change_password
             ) VALUES (?, 'supplier', ?, 'SUPPLIER', ?, ?, ?, ?, ?, ?, 1)
         """, (
-            clean_name, clean_name,
+            uname, clean_name,
             hash_secret(initial_pwd), hash_secret(initial_pin),
             hash_token_fast(raw_token), exp,
             clean_input(contact_person), normalize_phone_display(phone)
@@ -641,7 +714,7 @@ def build_whatsapp_message(supplier_name: str, contact_person: str, orders_list:
 
 
 def normalize_field_for_compare(field: str, val):
-    """מנרמל ערך להשוואה מדויקת בין DB ל-st.data_editor (פותר אי-תאימות int מול bool)."""
+    """מנרמל ערך להשוואה מדויקת בין DB ל-st.data_editor."""
     if field == "needs_attention":
         if isinstance(val, bool):
             return val
@@ -939,6 +1012,11 @@ def render_supplier_portal(db: DBWrapper, user: dict):
 def render_staff_dashboard(db: DBWrapper, user: dict):
     role = user["role"]
     scope = user.get("order_manager_scope", "ALL")
+
+    if db.is_postgres:
+        st.caption("🟢 מחובר למסד הנתונים הקבוע בענן (Neon PostgreSQL)")
+    else:
+        st.caption("⚠️ פועל במצב SQLite מקומי (לא הוגדר DATABASE_URL ב-Secrets)")
 
     if role == "admin":
         sec_alerts = db.fetchall("""
