@@ -5,7 +5,7 @@
 ================================================================================
 מבנה הקוד (7 פרקים מודולריים ומתועדים להעברה נוחה לאיש תוכנה):
 - פרק 1: הגדרות מערכת, רשימת מנהלי הזמנה והרשאות שדות בצד השרת (Config & RBAC)
-- פרק 2: שכבת עיצוב רספונסיבית למחשב ולטלפון הנייד (Responsive Mobile-First RTL CSS)
+- פרק 2: שכבת עיצוב רספונסיבית + נעילת ניגודיות למניעת שיבוש Dark Mode בנייד (CSS)
 - פרק 3: שכבת אבטחת מידע, הצפנת scrypt והגנת קלט/אקסל (Security & Crypto Engine)
 - פרק 4: שכבת מסד הנתונים - Neon PostgreSQL / SQLite + מיגרציה אוטומטית (Database Layer)
 - פרק 5: לוגיקה עסקית, מיזוג אקסל (VLOOKUP), קבצים מצורפים ווואטסאפ (Business Logic)
@@ -66,10 +66,8 @@ SUPPLIER_STATUS_OPTIONS = [
     "סופק"
 ]
 
-# רשימת מנהלי ההזמנה המעודכנת
 ORDER_MANAGERS = ["שגיא", "פיראס", "סאקר", "אדי", "כללי"]
 
-# אכיפת הרשאות שדות בצד השרת (מניעת דריסת שדות ספק ע"י מנהל הזמנה ולהפך)
 MANAGER_ALLOWED_FIELDS = {
     "part_number", "item_description", "quantity", "contact_person",
     "supplier_phone", "due_date", "internal_status", "mador_response",
@@ -79,7 +77,7 @@ MANAGER_ALLOWED_FIELDS = {
 ROLE_ALLOWED_FIELDS = {
     "supplier": {"supplier_status", "expected_date", "supplier_note", "needs_attention"},
     "manager": MANAGER_ALLOWED_FIELDS,
-    "mador": MANAGER_ALLOWED_FIELDS,  # תאימות לאחור
+    "mador": MANAGER_ALLOWED_FIELDS,
     "admin": {
         "order_manager", "order_number", "line_number", "part_number",
         "item_description", "quantity", "supplier_name", "contact_person",
@@ -115,15 +113,19 @@ GENERIC_PHRASES_TO_CLEAN = [
 
 
 # ==============================================================================
-# פרק 2: שכבת עיצוב רספונסיבית למחשב ולטלפון הנייד (Responsive RTL CSS)
+# פרק 2: עיצוב רספונסיבי + נעילת ניגודיות מוחלטת (מונע באג Dark Mode בנייד)
 # ==============================================================================
 
 def inject_custom_css():
-    """עיצוב רשמי מיושר לימין (RTL) עם התאמה מלאה למסכי טלפון נייד."""
+    """
+    נועל את כל רכיבי הממשק (כפתורים, כרטיסיות נפתחות, תיבות קלט, התראות וקוד)
+    לערכת צבעים בהירה עם ניגודיות חדה – גם כשהטלפון הנייד מוגדר על מצב כהה (Dark Mode).
+    """
     st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap');
-        :root, html, body, .stApp {
+
+        :root, html, body, .stApp, [data-testid="stAppViewContainer"] {
             color-scheme: light !important;
             font-family: 'Rubik', Arial, sans-serif !important;
             direction: rtl !important;
@@ -131,50 +133,243 @@ def inject_custom_css():
             background: linear-gradient(180deg, #fffbeb 0%, #f8fafc 35%, #f1f5f9 100%) !important;
             color: #0f172a !important;
         }
+
+        /* סרגל עליון בהיר וברור במקום שחור במצב כהה */
+        header[data-testid="stHeader"] {
+            background-color: rgba(255, 251, 235, 0.96) !important;
+            border-bottom: 1px solid #fde68a !important;
+            color: #0f172a !important;
+        }
+        header[data-testid="stHeader"] svg,
+        header[data-testid="stHeader"] button {
+            color: #0f172a !important;
+            fill: #0f172a !important;
+        }
+
         .block-container {
             max-width: 1280px !important;
-            padding-top: 3.4rem !important;
+            padding-top: 3.6rem !important;
             padding-bottom: 3rem !important;
             margin: 0 auto !important;
         }
+
+        /* כותרת ראשית כהה עם טקסט לבן וזהב */
         .header-box {
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 65%, #78350f 100%);
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 65%, #78350f 100%) !important;
             color: #ffffff !important;
             padding: 1.15rem 1.6rem;
             border-radius: 16px;
             border-bottom: 4px solid #f59e0b;
             margin-bottom: 1rem;
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1);
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
         }
-        .header-title { font-size: 1.4rem !important; font-weight: 700 !important; color: #ffffff !important; margin: 0 !important; }
-        .header-sub { font-size: 0.88rem !important; color: #fcd34d !important; margin-top: 0.25rem !important; }
+        .header-box .header-title {
+            font-size: 1.4rem !important;
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            margin: 0 !important;
+        }
+        .header-box .header-sub {
+            font-size: 0.88rem !important;
+            color: #fcd34d !important;
+            margin-top: 0.25rem !important;
+        }
+
+        /* כרטיסיות מדדים (KPI) */
         .kpi-card {
-            background: #ffffff;
-            border: 1px solid #fde68a;
-            border-right: 5px solid #f59e0b;
+            background: #ffffff !important;
+            border: 1px solid #fde68a !important;
+            border-right: 5px solid #f59e0b !important;
             border-radius: 12px;
             padding: 0.85rem 0.9rem;
             text-align: center;
-            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
             margin-bottom: 0.5rem;
         }
-        .kpi-num { font-size: 1.5rem; font-weight: 700; color: #b45309; }
-        .kpi-label { font-size: 0.83rem; color: #475569; font-weight: 500; }
-        .mobile-card-banner {
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-right: 4px solid #f59e0b;
+        .kpi-num { font-size: 1.5rem; font-weight: 700; color: #b45309 !important; }
+        .kpi-label { font-size: 0.83rem; color: #475569 !important; font-weight: 600; }
+
+        /* כרטיסיות נפתחות (Expanders) - מונע רקע שחור עם כתב שחור ב-Dark Mode */
+        [data-testid="stExpander"] {
+            background-color: #ffffff !important;
+            border: 1.5px solid #cbd5e1 !important;
+            border-radius: 12px !important;
+            margin-bottom: 0.75rem !important;
+            overflow: hidden !important;
+        }
+        [data-testid="stExpander"] details,
+        [data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+        }
+        [data-testid="stExpander"] summary {
+            background-color: #f1f5f9 !important;
+            color: #0f172a !important;
+            border-bottom: 1px solid #e2e8f0 !important;
+            padding: 0.8rem 1rem !important;
+        }
+        [data-testid="stExpander"] summary p,
+        [data-testid="stExpander"] summary span,
+        [data-testid="stExpander"] summary svg {
+            color: #0f172a !important;
+            fill: #0f172a !important;
+            font-weight: 600 !important;
+        }
+
+        /* כפתורים ראשיים (כתום-זהב עם כתב לבן) */
+        button[kind="primary"],
+        [data-testid="stBaseButton-primary"],
+        [data-testid="stBaseLinkButton-primary"] {
+            background: linear-gradient(135deg, #d97706 0%, #b45309 100%) !important;
+            color: #ffffff !important;
+            border: none !important;
+            font-weight: 600 !important;
+            border-radius: 10px !important;
+            box-shadow: 0 3px 10px rgba(180, 83, 9, 0.22) !important;
+        }
+        button[kind="primary"] *,
+        [data-testid="stBaseButton-primary"] *,
+        [data-testid="stBaseLinkButton-primary"] * {
+            color: #ffffff !important;
+        }
+
+        /* כפתורים משניים (רקע לבן נקי עם כתב שחור חד - מתקן כפתור 'סמן כנשלח') */
+        button[kind="secondary"],
+        [data-testid="stBaseButton-secondary"],
+        [data-testid="stBaseLinkButton-secondary"],
+        [data-testid="stDownloadButton"] button {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border: 1.5px solid #94a3b8 !important;
+            font-weight: 600 !important;
+            border-radius: 10px !important;
+        }
+        button[kind="secondary"] *,
+        [data-testid="stBaseButton-secondary"] *,
+        [data-testid="stBaseLinkButton-secondary"] *,
+        [data-testid="stDownloadButton"] button * {
+            color: #0f172a !important;
+        }
+
+        /* תיבות התראה (info / warning / error / success) בניגודיות גבוהה */
+        [data-testid="stAlert"] {
+            background-color: #fef3c7 !important;
+            border: 1px solid #f59e0b !important;
+            border-radius: 10px !important;
+        }
+        [data-testid="stAlert"] p,
+        [data-testid="stAlert"] span,
+        [data-testid="stAlert"] div {
+            color: #1e293b !important;
+            font-weight: 500 !important;
+        }
+
+        /* תיבת תצוגת הודעת וואטסאפ בהירה שגולשת נכון בנייד בלי חיתוך טקסט */
+        .wa-preview-box {
+            background-color: #f8fafc !important;
+            color: #0f172a !important;
+            border: 1.5px solid #cbd5e1 !important;
+            border-right: 4px solid #16a34a !important;
             border-radius: 10px;
-            padding: 0.7rem 0.9rem;
+            padding: 0.9rem 1rem;
+            margin-bottom: 0.8rem;
+            white-space: pre-wrap !important;
+            word-break: break-word !important;
+            overflow-wrap: anywhere !important;
+            direction: rtl !important;
+            text-align: right !important;
+            font-size: 0.92rem !important;
+            line-height: 1.6 !important;
+        }
+
+        /* תיבות st.code (אם מופיעות בפרטי הנפקת סיסמה) */
+        [data-testid="stCode"],
+        [data-testid="stCode"] pre,
+        [data-testid="stCode"] code {
+            background-color: #f8fafc !important;
+            color: #0f172a !important;
+            border: 1px solid #cbd5e1 !important;
+            white-space: pre-wrap !important;
+            word-break: break-word !important;
+            overflow-wrap: anywhere !important;
+        }
+
+        /* שדות קלט, בחירה, טפסים ותפריטים נפתחים */
+        input, textarea, select,
+        [data-baseweb="input"],
+        [data-baseweb="base-input"],
+        [data-baseweb="textarea"],
+        [data-baseweb="select"] > div {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            -webkit-text-fill-color: #0f172a !important;
+            border-color: #cbd5e1 !important;
+            direction: rtl !important;
+            text-align: right !important;
+            unicode-bidi: plaintext !important;
+        }
+        [data-baseweb="popover"],
+        [data-baseweb="menu"],
+        ul[role="listbox"],
+        li[role="option"] {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+        }
+        [data-testid="stForm"] {
+            background-color: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
+            border-radius: 12px !important;
+            padding: 0.9rem !important;
+        }
+
+        /* לשוניות (Tabs) ותוויות טקסט כלליות */
+        [data-testid="stTabs"] button {
+            background-color: transparent !important;
+            color: #334155 !important;
+            font-weight: 600 !important;
+        }
+        [data-testid="stTabs"] button[aria-selected="true"] {
+            color: #b45309 !important;
+            border-bottom-color: #d97706 !important;
+        }
+        label[data-testid="stWidgetLabel"] p,
+        .stRadio label p,
+        .stCheckbox label p,
+        [data-testid="stCaptionContainer"] p,
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] li,
+        [data-testid="stMarkdownContainer"] h1,
+        [data-testid="stMarkdownContainer"] h2,
+        [data-testid="stMarkdownContainer"] h3,
+        [data-testid="stMarkdownContainer"] h4,
+        [data-testid="stMarkdownContainer"] h5 {
+            color: #0f172a !important;
+        }
+
+        /* שמירה על טקסט לבן בתוך הכותרת הראשית */
+        .header-box p, .header-box div, .header-box span {
+            color: #ffffff !important;
+        }
+        .header-box .header-sub {
+            color: #fcd34d !important;
+        }
+
+        .mobile-card-banner {
+            background: #f8fafc !important;
+            color: #0f172a !important;
+            border: 1px solid #cbd5e1 !important;
+            border-right: 4px solid #f59e0b !important;
+            border-radius: 10px;
+            padding: 0.75rem 0.95rem;
             margin-bottom: 0.7rem;
             font-size: 0.9rem;
-            line-height: 1.55;
+            line-height: 1.6;
         }
         .badge-pill {
             display: inline-block;
-            background: #e2e8f0;
-            color: #1e293b;
-            padding: 0.2rem 0.55rem;
+            background: #e2e8f0 !important;
+            color: #0f172a !important;
+            padding: 0.22rem 0.55rem;
             border-radius: 6px;
             font-size: 0.8rem;
             font-weight: 600;
@@ -182,19 +377,18 @@ def inject_custom_css():
             margin-bottom: 0.25rem;
         }
         .watermark {
-            text-align: center; font-size: 0.8rem; color: #64748b !important;
-            margin-top: 2.5rem; font-weight: 600; letter-spacing: 0.5px;
-        }
-        input, textarea, select {
-            direction: rtl !important;
-            text-align: right !important;
-            unicode-bidi: plaintext !important;
+            text-align: center;
+            font-size: 0.8rem;
+            color: #64748b !important;
+            margin-top: 2.5rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
         }
 
         /* התאמה ייעודית למסכי טלפון נייד (Mobile-First) */
         @media (max-width: 768px) {
             .block-container {
-                padding-top: 2.2rem !important;
+                padding-top: 3.4rem !important;
                 padding-left: 0.65rem !important;
                 padding-right: 0.65rem !important;
             }
@@ -202,10 +396,15 @@ def inject_custom_css():
                 padding: 0.9rem 1rem;
                 border-radius: 12px;
             }
-            .header-title { font-size: 1.12rem !important; }
-            .header-sub { font-size: 0.78rem !important; }
+            .header-box .header-title { font-size: 1.12rem !important; }
+            .header-box .header-sub { font-size: 0.78rem !important; }
             .kpi-num { font-size: 1.25rem; }
-            button[kind="primary"], button[kind="secondary"] {
+            button[kind="primary"],
+            button[kind="secondary"],
+            [data-testid="stBaseButton-primary"],
+            [data-testid="stBaseButton-secondary"],
+            [data-testid="stBaseLinkButton-primary"],
+            [data-testid="stBaseLinkButton-secondary"] {
                 min-height: 2.9rem !important;
                 font-size: 0.96rem !important;
                 border-radius: 10px !important;
@@ -257,7 +456,7 @@ def hash_token_fast(token_str: str) -> str:
 
 
 def clean_input(val) -> str:
-    """מנקה ערך לשמירה נקייה במסד הנתונים (שומר גרשיים בעברית כמו בע\"מ בלי &quot;)."""
+    """מנקה ערך לשמירה נקייה במסד הנתונים."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return ""
     s = str(val).strip()
@@ -352,10 +551,6 @@ class DBWrapper:
         return dict(row) if row is not None else None
 
     def ensure_columns(self, table_name: str, columns_spec: list[tuple[str, str]]):
-        """
-        מוסיף בבטחה עמודות חדשות לטבלאות קיימות ב-Neon או ב-SQLite ללא מחיקת נתונים.
-        פותר קריסות מיגרציה כאשר עוברים מגרסה קודמת של האתר לגרסה החדשה.
-        """
         if self.is_postgres:
             for col_name, col_def in columns_spec:
                 self.execute(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_def}")
@@ -380,10 +575,7 @@ class DBWrapper:
 
 @st.cache_resource
 def init_db() -> bool:
-    """
-    מקים טבלאות, מבצע מיגרציה אוטומטית לעמודות חדשות בטבלאות קיימות ב-Neon,
-    ומסנכרן את חשבונות הצוות מ-st.secrets פעם אחת בעליית השרת.
-    """
+    """מקים טבלאות, מבצע מיגרציה אוטומטית לעמודות חדשות ב-Neon ומסנכרן חשבונות צוות."""
     db = None
     stage = "DB_CONNECT"
     try:
@@ -476,7 +668,6 @@ def init_db() -> bool:
             )
         """)
 
-        # מיגרציה אוטומטית לטבלאות שכבר קיימות ב-Neon מהגרסאות הקודמות (ללא מחיקת נתונים)
         stage = "MIGRATE_COLUMNS"
         db.ensure_columns("orders", [
             ("order_manager", "TEXT DEFAULT 'כללי'"),
@@ -513,7 +704,6 @@ def init_db() -> bool:
         db.execute("UPDATE orders SET is_deleted = 0 WHERE is_deleted IS NULL")
         db.execute("UPDATE orders SET needs_attention = 0 WHERE needs_attention IS NULL")
 
-        # יצירת חשבונות אוטומטית לספקים שכבר שמורים ב-Neon מהגרסה הקודמת
         existing_suppliers = db.fetchall("""
             SELECT supplier_name, MAX(contact_person) AS contact_person, MAX(supplier_phone) AS supplier_phone
             FROM orders
@@ -566,7 +756,6 @@ def init_db() -> bool:
 
 
 def log_audit(db: DBWrapper, actor_name: str, actor_role: str, action_type: str, details: str, order_ref: str = ""):
-    """מתעד אירוע ביומן הביקורת (ללא שמירת סיסמאות או מפתחות גלויים)."""
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     db.execute("""
         INSERT INTO audit_logs (timestamp, actor_name, actor_role, action_type, order_ref, details)
@@ -601,7 +790,6 @@ def normalize_phone_whatsapp(val) -> str:
 
 
 def infer_order_manager(row_dict: dict) -> str:
-    """מזהה את שם מנהל ההזמנה (שגיא / פיראס / סאקר / אדי / כללי) מתוך האקסל."""
     candidate_cols = ["מנהל ההזמנה", "מנהל הזמנה", "קצין אחראי", "אחראי", "מנהל", "מדור"]
     explicit = ""
     for col in candidate_cols:
@@ -714,7 +902,6 @@ def build_whatsapp_message(supplier_name: str, contact_person: str, orders_list:
 
 
 def normalize_field_for_compare(field: str, val):
-    """מנרמל ערך להשוואה מדויקת בין DB ל-st.data_editor."""
     if field == "needs_attention":
         if isinstance(val, bool):
             return val
@@ -1103,7 +1290,6 @@ def render_staff_dashboard(db: DBWrapper, user: dict):
 
 
 def _render_tab_orders_table_and_mobile(db: DBWrapper, user: dict, all_orders: list[dict]):
-    """תומך בעריכת כרטיסיות נוחה לנייד (Admin + מנהלי הזמנה) ובטבלה מלאה למחשב עם שמירה דיפרנציאלית."""
     role = user["role"]
     if not all_orders:
         st.info("אין הזמנות להצגה. ניתן לטעון קובץ אקסל בלשונית 'טעינת אקסל'.")
@@ -1140,7 +1326,6 @@ def _render_tab_orders_table_and_mobile(db: DBWrapper, user: dict, all_orders: l
         st.info("לא נמצאו הזמנות התואמות את תנאי החיפוש או הסינון.")
         return
 
-    # ================= מצב א': כרטיסיות לנייד =================
     if view_mode.startswith("📱"):
         st.info("📱 **מצב עריכה לנייד:** לחץ על כל הזמנה כדי לפתוח כרטיסייה נוחה לעריכה מהטלפון ולשמור מיידית.")
         max_show = st.number_input("כמות כרטיסיות להצגה בעמוד:", min_value=5, max_value=200, value=25, step=5)
@@ -1230,8 +1415,6 @@ def _render_tab_orders_table_and_mobile(db: DBWrapper, user: dict, all_orders: l
                         f"https://wa.me/{ph_wa}?text={urllib.parse.quote(quick_msg)}",
                         use_container_width=True
                     )
-
-    # ================= מצב ב': טבלה מלאה למחשב =================
     else:
         df_view = pd.DataFrame(filtered)
         df_view["needs_attention"] = df_view["needs_attention"].apply(lambda x: bool(int(x or 0)))
@@ -1371,7 +1554,7 @@ def _render_tab_attachments_and_history(db: DBWrapper, user: dict, all_orders: l
 
 
 def _render_tab_whatsapp(db: DBWrapper, user: dict, all_orders: list[dict]):
-    """מרכז וואטסאפ אוניברסלי (wa.me לנייד ולמחשב) עם תור שליחה מסודר ומעקב מי כבר נשלח."""
+    """מרכז וואטסאפ אוניברסלי עם תיבת תצוגה בהירה ומותאמת לנייד ללא חיתוך טקסט."""
     st.markdown("#### 📲 מרכז שיגור וואטסאפ ותזכורות לספקים")
     st.caption("💡 קישורי הוואטסאפ פועלים מהנייד ומהמחשב. כל לחיצה פותחת את הצ'אט מוכן עם ההודעה – שלח וסמן 'נשלח' כדי לעבור לספק הבא.")
 
@@ -1440,7 +1623,7 @@ def _render_tab_whatsapp(db: DBWrapper, user: dict, all_orders: list[dict]):
         status_icon = "✅ נשלח" if is_sent else f"#{idx} ממתין לשליחה"
 
         with st.expander(f"{status_icon} | {sname} (איש קשר: {contact or 'לא הוגדר'} | {len(s_orders)} שורות)", expanded=not is_sent):
-            st.code(msg, language="text")
+            st.markdown(f"<div class='wa-preview-box'>{escape_html(msg)}</div>", unsafe_allow_html=True)
             b1, b2 = st.columns([1.5, 1])
             if wa_url:
                 b1.link_button(f"📲 פתח וואטסאפ אל {sname}", wa_url, type="primary", use_container_width=True)
@@ -1534,7 +1717,10 @@ def _render_tab_excel_upload(db: DBWrapper, user: dict):
                 else:
                     db.execute("""
                         UPDATE orders
-                        SET order_manager = ?, part_number = ?, item_description = ?, quantity = ?,
+                        SET order_manager = CASE WHEN ? != 'כללי' THEN ? ELSE order_manager END,
+                            part_number = CASE WHEN ? != '' THEN ? ELSE part_number END,
+                            item_description = CASE WHEN ? != '' THEN ? ELSE item_description END,
+                            quantity = ?,
                             supplier_name = ?,
                             contact_person = CASE WHEN ? != '' THEN ? ELSE contact_person END,
                             supplier_phone = CASE WHEN ? != '' THEN ? ELSE supplier_phone END,
@@ -1543,9 +1729,13 @@ def _render_tab_excel_upload(db: DBWrapper, user: dict):
                             last_updated = ?
                         WHERE id = ?
                     """, (
-                        pr["order_manager"], pr["part_number"], pr["item_description"], pr["quantity"],
-                        pr["supplier_name"], pr["contact_person"], pr["contact_person"],
-                        pr["supplier_phone"], pr["supplier_phone"], pr["due_date"], pr["due_date"],
+                        pr["order_manager"], pr["order_manager"],
+                        pr["part_number"], pr["part_number"],
+                        pr["item_description"], pr["item_description"],
+                        pr["quantity"], pr["supplier_name"],
+                        pr["contact_person"], pr["contact_person"],
+                        pr["supplier_phone"], pr["supplier_phone"],
+                        pr["due_date"], pr["due_date"],
                         pr["internal_status"], pr["internal_status"], now_s, existing["id"]
                     ))
             log_audit(db, user["entity_name"], role, "EXCEL_SYNC", f"נטענו/סונכרנו {len(preview_rows)} שורות מאקסל")
